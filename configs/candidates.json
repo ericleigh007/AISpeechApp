@@ -1,0 +1,112 @@
+{
+  "candidates": [
+    {
+      "id": "qwen3_tts_17b_customvoice",
+      "name": "Qwen3-TTS 1.7B CustomVoice",
+      "priority": 1,
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      "backend": "qwen3_tts",
+      "expected_imports": ["qwen_tts", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "multilingual"],
+      "notes": "Primary local high-quality baseline."
+    },
+    {
+      "id": "voxcpm2",
+      "name": "VoxCPM2",
+      "priority": 1,
+      "repo_id": "openbmb/VoxCPM2",
+      "backend": "voxcpm2",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz"],
+      "notes": "Primary challenger; tokenizer-free diffusion-autoregressive stack."
+    },
+    {
+      "id": "dots_tts_soar",
+      "name": "dots.tts soar",
+      "priority": 1,
+      "repo_id": "rednote-hilab/dots.tts-soar",
+      "backend": "dots_tts",
+      "expected_imports": ["dots_tts", "torch", "soundfile"],
+      "capabilities": [
+        "tts",
+        "voice_clone",
+        "multilingual",
+        "48khz",
+        "python_api",
+        "cli",
+        "fine_tuning"
+      ],
+      "notes": "Main dots.tts quality candidate: highest zero-shot fidelity and speaker similarity variant."
+    },
+    {
+      "id": "indextts2",
+      "name": "IndexTTS2",
+      "priority": 1,
+      "repo_id": "IndexTeam/IndexTTS-2",
+      "backend": "indextts2",
+      "expected_imports": ["indextts", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "emotion_control", "duration_control"],
+      "notes": "Expressiveness and controllability benchmark."
+    },
+    {
+      "id": "fish_speech_s2_pro",
+      "name": "Fish Speech S2 Pro",
+      "priority": 2,
+      "repo_id": "fishaudio/s2-pro",
+      "backend": "fish_speech",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "emotion_tags", "multilingual"],
+      "notes": "High-end comparison point; verify license before product use."
+    },
+    {
+      "id": "omnivoice",
+      "name": "OmniVoice",
+      "priority": 2,
+      "repo_id": "k2-fsa/OmniVoice",
+      "backend": "omnivoice",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "massively_multilingual"],
+      "notes": "New multilingual zero-shot candidate."
+    },
+    {
+      "id": "moss_tts_v15",
+      "name": "MOSS-TTS v1.5",
+      "priority": 2,
+      "repo_id": "OpenMOSS-Team/MOSS-TTS-v1.5",
+      "backend": "moss_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "pronunciation_control", "long_form"],
+      "notes": "Newer long-form/cloning candidate."
+    },
+    {
+      "id": "dots_tts_mf",
+      "name": "dots.tts mf",
+      "priority": 2,
+      "repo_id": "rednote-hilab/dots.tts-mf",
+      "backend": "dots_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "multilingual", "48khz", "low_latency", "python_api", "cli"],
+      "notes": "MeanFlow distilled dots.tts latency candidate; compare quality/latency against soar."
+    },
+    {
+      "id": "higgs_audio_v3",
+      "name": "Higgs Audio v3 TTS 4B",
+      "priority": 3,
+      "repo_id": "bosonai/higgs-audio-v3-tts-4b",
+      "backend": "higgs_audio",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts"],
+      "notes": "Watch-list model updated recently on Hugging Face."
+    },
+    {
+      "id": "zonos2",
+      "name": "ZONOS2",
+      "priority": 3,
+      "repo_id": "Zyphra/ZONOS2",
+      "backend": "zonos2",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts"],
+      "notes": "Watch-list model updated recently on Hugging Face."
+    }
+  ]
+}

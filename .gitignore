@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+outputs/*
+reports/*
+voice_refs/*
+!outputs/.gitkeep
+!reports/.gitkeep
+!voice_refs/README.md

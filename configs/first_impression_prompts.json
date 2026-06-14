@@ -1,0 +1,15 @@
+{
+  "description": "Medium-length first-impression TTS phrases. Each generated sample should announce the model name first.",
+  "languages": {
+    "en": {
+      "label": "English",
+      "language_hint": "English",
+      "template": "This is {model_name}. Today we test pronunciation with archival photographs, Sao Paulo, Worcestershire sauce, neural vocoders, and a quietly skeptical meteorologist."
+    },
+    "pt-PT": {
+      "label": "European Portuguese",
+      "language_hint": "Portuguese",
+      "template": "Este é o modelo {model_name}. Hoje testamos a pronúncia europeia com fotografias de arquivo, Lisboa, Coimbra, receção, facto, elétrico, molho Worcestershire, vocoders neuronais e um meteorologista discretamente cético."
+    }
+  }
+}

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aispeechapp"
+version = "0.1.0"
+description = "Local state-of-the-art TTS smoke and comparison harness."
+requires-python = ">=3.11"
+dependencies = [
+    "huggingface_hub>=0.33",
+    "packaging>=24",
+    "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-qt>=4.5",
+    "ruff>=0.6",
+]
+gui = [
+    "PySide6>=6.7",
+    "sounddevice>=0.5",
+]
+metrics = [
+    "librosa>=0.10",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+aispeech-smoke = "aispeechapp.smoke:main"
+aispeech-first-impression = "aispeechapp.first_impression:main"
+aispeech-gui = "aispeechapp.gui:main"
+aispeech-desktop-demo-probe = "aispeechapp.desktop_demo_probe:main"
+aispeech-voxcpm2-stream = "aispeechapp.voxcpm2_streaming:main"
+
+[tool.setuptools.packages.find]
+include = ["aispeechapp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
