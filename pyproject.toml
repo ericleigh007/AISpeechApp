@@ -9,6 +9,7 @@ description = "Local state-of-the-art TTS smoke and comparison harness."
 requires-python = ">=3.11"
 dependencies = [
     "huggingface_hub>=0.33",
+    "numpy>=1.26",
     "packaging>=24",
     "soundfile>=0.12",
 ]
@@ -25,7 +26,6 @@ gui = [
 ]
 metrics = [
     "librosa>=0.10",
-    "numpy>=1.26",
 ]
 
 [project.scripts]

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from aispeechapp.cache_paths import DEFAULT_MODEL_ROOT, configure_model_caches
 
@@ -11,6 +15,43 @@ configure_model_caches()
 import soundfile as sf  # noqa: E402
 
 VOXCPM2_SAMPLE_RATE = 48000
+
+
+def _write_audio_file(output: Path, audio: np.ndarray, sample_rate: int) -> None:
+    suffix = output.suffix.lower()
+    if suffix == ".wav":
+        sf.write(output, audio, sample_rate)
+        return
+
+    if suffix != ".mp3":
+        raise RuntimeError(f"Unsupported output extension '{output.suffix}'. Use .wav or .mp3.")
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("MP3 output requires ffmpeg to be available on PATH.")
+
+    temp_wav = output.with_name(f"{output.stem}.tmp.wav")
+    try:
+        sf.write(temp_wav, audio, sample_rate)
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(temp_wav),
+                "-codec:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                str(output),
+            ],
+            check=True,
+        )
+    finally:
+        temp_wav.unlink(missing_ok=True)
 
 
 def _write_qwen3(candidate: str, text: str, language_code: str, language_hint: str, output: Path) -> None:
@@ -107,6 +148,55 @@ def _write_indextts2(text: str, output: Path) -> None:
     tts.infer(spk_audio_prompt=str(ref_audio), text=text, output_path=str(output), verbose=False)
 
 
+def _write_omnivoice(text: str, output: Path) -> None:
+    import torch
+    from omnivoice import OmniVoice
+
+    ref_audio = Path("voice_refs/first_impression.wav")
+    ref_text = Path("voice_refs/first_impression.txt")
+    if not ref_audio.exists() or not ref_text.exists():
+        raise RuntimeError(
+            "OmniVoice needs voice_refs/first_impression.wav and "
+            "voice_refs/first_impression.txt for voice cloning."
+        )
+
+    device_map = "cuda:0" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=device_map, dtype=dtype)
+    audio = model.generate(
+        text=text,
+        ref_audio=str(ref_audio),
+        ref_text=ref_text.read_text(encoding="utf-8").strip(),
+    )
+    _write_audio_file(output, np.asarray(audio[0], dtype=np.float32), 24000)
+
+
+def _write_vibevoice_15b(text: str, output: Path) -> None:
+    import torch
+    from transformers import pipeline
+
+    ref_audio = Path("voice_refs/first_impression.wav")
+    if ref_audio.exists():
+        print(
+            "WARNING: VibeVoice 1.5B Transformers pipeline path does not expose "
+            "AISpeechApp's reference-WAV cloning hook yet; generating with its default voice path.",
+            file=sys.stderr,
+        )
+
+    pipe = pipeline(
+        "text-to-speech",
+        model="microsoft/VibeVoice-1.5B",
+        device=0 if torch.cuda.is_available() else -1,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+    )
+    result = pipe(text)
+    audio = result.get("audio")
+    sample_rate = result.get("sampling_rate") or result.get("sample_rate") or 24000
+    if audio is None:
+        raise RuntimeError("VibeVoice pipeline did not return an audio field.")
+    _write_audio_file(output, np.asarray(audio).squeeze(), int(sample_rate))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backend-specific synthesis helper.")
     parser.add_argument("--candidate", required=True)
@@ -134,6 +224,10 @@ def main() -> int:
         _write_dots_tts(args.candidate, args.text, args.output)
     elif args.candidate == "indextts2":
         _write_indextts2(args.text, args.output)
+    elif args.candidate == "omnivoice":
+        _write_omnivoice(args.text, args.output)
+    elif args.candidate == "microsoft_vibevoice_15b":
+        _write_vibevoice_15b(args.text, args.output)
     else:
         raise RuntimeError(f"No synthesis implementation for {args.candidate}")
     return 0

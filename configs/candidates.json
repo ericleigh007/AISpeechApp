@@ -64,7 +64,7 @@
       "priority": 2,
       "repo_id": "k2-fsa/OmniVoice",
       "backend": "omnivoice",
-      "expected_imports": ["torch", "soundfile"],
+      "expected_imports": ["omnivoice", "torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "voice_design", "massively_multilingual"],
       "notes": "New multilingual zero-shot candidate."
     },
@@ -89,6 +89,46 @@
       "notes": "MeanFlow distilled dots.tts latency candidate; compare quality/latency against soar."
     },
     {
+      "id": "cosyvoice3_05b_2512",
+      "name": "Fun-CosyVoice3 0.5B 2512",
+      "priority": 2,
+      "repo_id": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+      "backend": "cosyvoice3",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "multilingual", "streaming", "24khz"],
+      "notes": "Modern small streaming zero-shot cloning candidate; Apache-2.0 and high HF adoption."
+    },
+    {
+      "id": "glm_tts",
+      "name": "GLM-TTS",
+      "priority": 2,
+      "repo_id": "zai-org/GLM-TTS",
+      "backend": "glm_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "emotion_control", "streaming", "phoneme_control"],
+      "notes": "MIT-licensed Chinese/English zero-shot cloning model with emotion and streaming claims."
+    },
+    {
+      "id": "fireredtts2",
+      "name": "FireRedTTS2",
+      "priority": 2,
+      "repo_id": "FireRedTeam/FireRedTTS2",
+      "backend": "fireredtts2",
+      "expected_imports": ["torch", "torchaudio", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "multispeaker", "streaming", "multilingual"],
+      "notes": "Long-form multi-speaker streaming TTS with cross-lingual zero-shot cloning claims."
+    },
+    {
+      "id": "voxcpm_05b",
+      "name": "VoxCPM 0.5B",
+      "priority": 2,
+      "repo_id": "openbmb/VoxCPM-0.5B",
+      "backend": "voxcpm",
+      "expected_imports": ["voxcpm", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "streaming", "voice_design"],
+      "notes": "Smaller Apache-2.0 VoxCPM candidate; likely worth comparing against VoxCPM2 for latency."
+    },
+    {
       "id": "higgs_audio_v3",
       "name": "Higgs Audio v3 TTS 4B",
       "priority": 3,
@@ -97,6 +137,96 @@
       "expected_imports": ["torch", "soundfile"],
       "capabilities": ["tts"],
       "notes": "Watch-list model updated recently on Hugging Face."
+    },
+    {
+      "id": "marco_voice",
+      "name": "Marco-Voice",
+      "priority": 3,
+      "repo_id": "AIDC-AI/Marco-Voice",
+      "backend": "marco_voice",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "emotion_control", "multilingual"],
+      "notes": "Apache-2.0 CosyVoice-compatible emotional cloning framework; low adoption so far."
+    },
+    {
+      "id": "microsoft_vibevoice_15b",
+      "name": "VibeVoice 1.5B",
+      "priority": 3,
+      "repo_id": "microsoft/VibeVoice-1.5B",
+      "backend": "vibevoice",
+      "expected_imports": ["transformers", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "multispeaker", "long_form"],
+      "notes": "Very popular MIT long-form multi-speaker candidate; check current code availability and cloning API."
+    },
+    {
+      "id": "microsoft_vibevoice_realtime_05b",
+      "name": "VibeVoice Realtime 0.5B",
+      "priority": 3,
+      "repo_id": "microsoft/VibeVoice-Realtime-0.5B",
+      "backend": "vibevoice",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "streaming", "low_latency"],
+      "notes": "High-adoption realtime model, but not a normal arbitrary WAV-cloning path; watch for voice-prompt support."
+    },
+    {
+      "id": "miotts_04b",
+      "name": "MioTTS 0.4B",
+      "priority": 3,
+      "repo_id": "Aratako/MioTTS-0.4B",
+      "backend": "miotts",
+      "expected_imports": ["transformers", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "low_latency", "bilingual"],
+      "notes": "Small English/Japanese zero-shot cloning candidate with very low claimed RTF."
+    },
+    {
+      "id": "miotts_26b",
+      "name": "MioTTS 2.6B",
+      "priority": 3,
+      "repo_id": "Aratako/MioTTS-2.6B",
+      "backend": "miotts",
+      "expected_imports": ["transformers", "torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "bilingual"],
+      "notes": "Larger English/Japanese MioTTS candidate; compare only if 0.4B is promising."
+    },
+    {
+      "id": "irodori_tts_500m_v3",
+      "name": "Irodori-TTS 500M v3",
+      "priority": 3,
+      "repo_id": "Aratako/Irodori-TTS-500M-v3",
+      "backend": "irodori_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "style_control", "japanese"],
+      "notes": "Recent Japanese zero-shot cloning model with emoji style/effect controls; regional test candidate."
+    },
+    {
+      "id": "vieneu_tts_v2_turbo",
+      "name": "VieNeu-TTS v2 Turbo",
+      "priority": 3,
+      "repo_id": "pnnbao-ump/VieNeu-TTS-v2-Turbo",
+      "backend": "vieneu_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "low_latency", "bilingual"],
+      "notes": "Vietnamese/English instant zero-shot cloning candidate; regional but current."
+    },
+    {
+      "id": "openf5_tts_base",
+      "name": "OpenF5 TTS Base",
+      "priority": 3,
+      "repo_id": "mrfakename/OpenF5-TTS-Base",
+      "backend": "f5_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone"],
+      "notes": "Apache-2.0 F5-style alpha; lower priority because card says quality trails official NC F5-TTS."
+    },
+    {
+      "id": "spark_tts_05b",
+      "name": "Spark-TTS 0.5B",
+      "priority": 4,
+      "repo_id": "HKUSTAudio/Spark-TTS-0.5B",
+      "backend": "spark_tts",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone"],
+      "notes": "Zero-shot cloning model but license is CC BY-NC-SA; keep as reference-only unless needed."
     },
     {
       "id": "zonos2",

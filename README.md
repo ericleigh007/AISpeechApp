@@ -26,6 +26,7 @@ Initial high-priority candidates:
 | IndexTTS2 | `IndexTeam/IndexTTS-2` | Expressive zero-shot cloning with duration/emotion control. |
 | Fish Speech S2 Pro | `fishaudio/s2-pro` | High-end expressive/cloning comparison point. |
 | OmniVoice | `k2-fsa/OmniVoice` | New multilingual zero-shot cloning and voice design candidate. |
+| VibeVoice 1.5B | `microsoft/VibeVoice-1.5B` | Long-form multi-speaker TTS candidate; current backend uses the Transformers TTS pipeline. |
 | MOSS-TTS v1.5 | `OpenMOSS-Team/MOSS-TTS-v1.5` | Newer long-form/cloning candidate with pronunciation control claims. |
 
 Watch-list candidates:
@@ -88,6 +89,33 @@ reuse the loaded model. Playback defaults favor smooth output: `0.45s`
 prebuffer and high PortAudio latency. Lower those controls only when tuning for
 minimum start latency.
 
+## Batch Backend Outputs
+
+The backend synthesis helper supports non-streaming file generation for the
+new OmniVoice and VibeVoice 1.5B candidates:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\synthesize_backend.py `
+  --candidate omnivoice `
+  --text "OmniVoice first impression sample." `
+  --language-code en `
+  --language-hint English `
+  --output outputs\omnivoice_sample.wav
+
+.\.venv\Scripts\python.exe .\scripts\synthesize_backend.py `
+  --candidate microsoft_vibevoice_15b `
+  --text "VibeVoice first impression sample." `
+  --language-code en `
+  --language-hint English `
+  --output outputs\vibevoice_sample.mp3
+```
+
+Use `.wav` for direct PCM output or `.mp3` for FFmpeg-backed MP3 encoding.
+OmniVoice expects `voice_refs\first_impression.wav` and
+`voice_refs\first_impression.txt` for zero-shot cloning. VibeVoice 1.5B is
+currently wired through the Hugging Face `text-to-speech` pipeline; arbitrary
+reference-WAV cloning remains unverified until that API exposes a stable hook.
+
 ## Repository Policy
 
 - Use the local `.venv` only.
@@ -106,6 +134,7 @@ minimum start latency.
 | `synthesis` | Generate one short neutral WAV. |
 | `clone` | Generate one short WAV using a reference voice. |
 
-Only `metadata` and import/cache readiness are implemented in the initial
-scaffold. Synthesis and clone smokes will be added backend by backend after we
-decide install order.
+Metadata and import/cache readiness are implemented across the catalog.
+Backend-specific synthesis is now present for VoxCPM2, Qwen3-TTS, dots.tts,
+IndexTTS2, OmniVoice, and VibeVoice 1.5B, with actual runtime availability
+depending on each package and model cache.
