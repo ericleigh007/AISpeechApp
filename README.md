@@ -104,10 +104,16 @@ prebuffer and high PortAudio latency. Lower those controls only when tuning for
 minimum start latency.
 
 During streaming playback, the GUI renders a realtime waveform and compact
-frequency spectrum from the same audio chunks that are written to disk and sent
-to the selected output device.
+speech-band frequency histogram from the same audio chunks that are written to
+disk and sent to the selected output device. The waveform is scaled so
+full-level audio fills the available height, while the spectrum groups energy
+into log-spaced speech-range bands instead of raw FFT bins.
 The `Visualize playback` radio control can be toggled during playback to
 disable or re-enable visualizer updates without changing audio generation.
+
+VoxCPM2 streaming also includes optional smoothed peak normalization for the
+saved WAV and live playback path. It defaults on with a `0.85` target peak and
+can be disabled from the GUI when judging the raw model output.
 
 Generation runs on a background Qt worker thread, so model loading and synthesis
 do not block the native GUI event loop while the run is in progress.

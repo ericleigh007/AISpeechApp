@@ -88,6 +88,7 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_pat
     audio_device = _find(window, "audio_device_box")
     audio_device.setCurrentIndex(1)
     _find(window, "playback_prebuffer_box").setValue(0.65)
+    _find(window, "audio_target_peak_box").setValue(0.9)
     latency = _find(window, "audio_latency_box")
     latency.setCurrentIndex(1)
     guidance = _find(window, "generation_parameter_cfg_value")
@@ -119,6 +120,8 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_pat
             "retry_badcase_ratio_threshold": 6.0,
             "min_len": 2,
             "max_len": 4096,
+            "audio_normalization": True,
+            "audio_target_peak": 0.9,
         },
         audio_observer=calls[0].audio_observer,
     )
@@ -232,6 +235,9 @@ def test_gui_generation_controls_persist_per_model(tmp_path):
     first_candidate_box.setCurrentIndex(first_candidate_box.findData("voxcpm2"))
     _find(first_window, "generation_parameter_cfg_value").setValue(2.6)
     _find(first_window, "generation_parameter_inference_timesteps").setValue(16)
+    _find(first_window, "visualize_playback_radio").setChecked(False)
+    _find(first_window, "normalize_audio_checkbox").setChecked(False)
+    _find(first_window, "audio_target_peak_box").setValue(0.7)
     first_window.close()
 
     second_window = create_main_window(
@@ -244,6 +250,9 @@ def test_gui_generation_controls_persist_per_model(tmp_path):
     assert second_candidate_box.currentData() == "voxcpm2"
     assert _find(second_window, "generation_parameter_cfg_value").value() == 2.6
     assert _find(second_window, "generation_parameter_inference_timesteps").value() == 16
+    assert _find(second_window, "visualize_playback_radio").isChecked() is False
+    assert _find(second_window, "normalize_audio_checkbox").isChecked() is False
+    assert _find(second_window, "audio_target_peak_box").value() == 0.7
 
     second_candidate_box.setCurrentIndex(second_candidate_box.findData("dots_tts_soar"))
     _find(second_window, "generation_parameter_num_steps").setValue(13)

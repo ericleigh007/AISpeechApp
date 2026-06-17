@@ -7,6 +7,7 @@ import pytest
 import soundfile as sf
 
 from aispeechapp.voxcpm2_streaming import (
+    StreamingPeakNormalizer,
     append_streaming_history,
     synthesize_voxcpm2_streaming,
     write_streaming_report,
@@ -84,6 +85,26 @@ def test_streaming_synthesis_writes_chunks_and_latency(tmp_path: Path):
     assert model.calls[0]["normalize"] is True
     assert model.calls[0]["denoise"] is False
     assert model.calls[0]["retry_badcase"] is False
+    assert result.audio_normalization is True
+    assert result.audio_target_peak == 0.85
+
+
+def test_streaming_peak_normalizer_lifts_quiet_audio():
+    normalizer = StreamingPeakNormalizer(target_peak=0.8, smoothing=1.0)
+    audio = np.ones(1000, dtype=np.float32) * 0.1
+
+    normalized = normalizer.process(audio)
+
+    assert np.max(np.abs(normalized)) == pytest.approx(0.4)
+
+
+def test_streaming_peak_normalizer_limits_loud_audio():
+    normalizer = StreamingPeakNormalizer(target_peak=0.8, smoothing=1.0)
+    audio = np.ones(1000, dtype=np.float32) * 2.0
+
+    normalized = normalizer.process(audio)
+
+    assert np.max(np.abs(normalized)) == pytest.approx(0.8)
 
 
 def test_streaming_synthesis_passes_generation_knobs(tmp_path: Path):
@@ -145,7 +166,25 @@ def test_streaming_synthesis_can_play_chunks_to_audio_sink(tmp_path: Path):
     assert result.audio_latency == "high"
     assert len(sink.writes) == 1
     assert sink.writes[0].shape == (240,)
+    assert np.max(np.abs(sink.writes[0])) > 0.1
     assert sink.closed is True
+
+
+def test_streaming_synthesis_can_disable_audio_normalization(tmp_path: Path):
+    model = FakeStreamingModel([np.ones(240, dtype=np.float32) * 0.1])
+    sink = FakeAudioSink()
+
+    synthesize_voxcpm2_streaming(
+        text="Hello from VoxCPM2.",
+        output_path=tmp_path / "out.wav",
+        play_audio=True,
+        audio_normalization=False,
+        model_factory=lambda: model,
+        audio_sink_factory=lambda sample_rate, device, prebuffer_s, latency: sink,
+        clock=FakeClock([0.0, 0.1, 0.2]),
+    )
+
+    assert np.max(np.abs(sink.writes[0])) == pytest.approx(0.1)
 
 
 def test_streaming_report_and_history_are_written(tmp_path: Path):

@@ -65,6 +65,8 @@ class StreamingSynthesisResult:
     retry_badcase: bool
     retry_badcase_max_times: int
     retry_badcase_ratio_threshold: float
+    audio_normalization: bool
+    audio_target_peak: float
     chunk_count: int
     first_chunk_latency_s: float | None
     total_elapsed_s: float
@@ -151,6 +153,28 @@ class SoundDeviceSink:
             self._stream.close()
 
 
+class StreamingPeakNormalizer:
+    def __init__(
+        self,
+        *,
+        target_peak: float = 0.85,
+        max_gain: float = 4.0,
+        smoothing: float = 0.2,
+    ) -> None:
+        self._target_peak = max(0.05, min(0.98, target_peak))
+        self._max_gain = max(1.0, max_gain)
+        self._smoothing = max(0.0, min(1.0, smoothing))
+        self._gain = 1.0
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        if peak > 1e-5:
+            desired_gain = max(0.1, min(self._max_gain, self._target_peak / peak))
+            self._gain = (self._gain * (1.0 - self._smoothing)) + (desired_gain * self._smoothing)
+        normalized = audio * self._gain
+        return np.clip(normalized, -0.98, 0.98).astype(np.float32, copy=False)
+
+
 def synthesize_voxcpm2_streaming(
     *,
     text: str,
@@ -167,6 +191,8 @@ def synthesize_voxcpm2_streaming(
     retry_badcase: bool = False,
     retry_badcase_max_times: int = 3,
     retry_badcase_ratio_threshold: float = 6.0,
+    audio_normalization: bool = True,
+    audio_target_peak: float = 0.85,
     sample_rate: int = VOXCPM2_SAMPLE_RATE,
     play_audio: bool = False,
     audio_device: str | int | None = None,
@@ -197,6 +223,11 @@ def synthesize_voxcpm2_streaming(
         if play_audio
         else None
     )
+    normalizer = (
+        StreamingPeakNormalizer(target_peak=audio_target_peak)
+        if audio_normalization
+        else None
+    )
 
     try:
         with sf.SoundFile(str(output_path), mode="w", samplerate=sample_rate, channels=1) as writer:
@@ -219,6 +250,8 @@ def synthesize_voxcpm2_streaming(
             ):
                 now = clock()
                 audio = _to_mono_float32(chunk)
+                if normalizer is not None:
+                    audio = normalizer.process(audio)
                 if first_chunk_latency is None:
                     first_chunk_latency = round(now - start, 3)
                 writer.write(audio)
@@ -270,6 +303,8 @@ def synthesize_voxcpm2_streaming(
         retry_badcase=retry_badcase,
         retry_badcase_max_times=retry_badcase_max_times,
         retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
+        audio_normalization=audio_normalization,
+        audio_target_peak=audio_target_peak,
         chunk_count=len(chunks),
         first_chunk_latency_s=first_chunk_latency,
         total_elapsed_s=total_elapsed,
@@ -328,6 +363,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--retry-badcase", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--retry-badcase-max-times", type=int, default=3)
     parser.add_argument("--retry-badcase-ratio-threshold", type=float, default=6.0)
+    parser.add_argument("--audio-normalization", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--audio-target-peak", type=float, default=0.85)
     return parser.parse_args(argv)
 
 
@@ -348,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
         retry_badcase=args.retry_badcase,
         retry_badcase_max_times=args.retry_badcase_max_times,
         retry_badcase_ratio_threshold=args.retry_badcase_ratio_threshold,
+        audio_normalization=args.audio_normalization,
+        audio_target_peak=args.audio_target_peak,
         play_audio=args.play_audio,
         audio_device=args.audio_device,
         playback_prebuffer_s=args.playback_prebuffer_s,

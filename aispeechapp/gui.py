@@ -120,6 +120,8 @@ def _run_voxcpm2_streaming(
         retry_badcase=bool(options.get("retry_badcase", False)),
         retry_badcase_max_times=int(options.get("retry_badcase_max_times", 3)),
         retry_badcase_ratio_threshold=float(options.get("retry_badcase_ratio_threshold", 6.0)),
+        audio_normalization=bool(options.get("audio_normalization", True)),
+        audio_target_peak=float(options.get("audio_target_peak", 0.85)),
         audio_observer=audio_observer,
     )
     write_streaming_report(result, DEFAULT_REPORT_PATH)
@@ -258,7 +260,7 @@ def create_main_window(
             super().__init__()
             self._sample_rate = 48000
             self._samples = np.zeros(0, dtype=np.float32)
-            self._spectrum = np.zeros(64, dtype=np.float32)
+            self._spectrum = np.zeros(40, dtype=np.float32)
             self.setMinimumHeight(150)
             self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
 
@@ -272,8 +274,21 @@ def create_main_window(
 
         def clear(self) -> None:
             self._samples = np.zeros(0, dtype=np.float32)
-            self._spectrum = np.zeros(64, dtype=np.float32)
+            self._spectrum = np.zeros(40, dtype=np.float32)
             self.update()
+
+        def _speech_band_histogram(self, window: np.ndarray) -> np.ndarray:
+            shaped = window * np.hanning(window.size)
+            magnitudes = np.abs(np.fft.rfft(shaped))
+            freqs = np.fft.rfftfreq(window.size, d=1.0 / self._sample_rate)
+            edges = np.geomspace(80.0, 12000.0, 41)
+            bands = np.zeros(40, dtype=np.float32)
+            for index in range(40):
+                mask = (freqs >= edges[index]) & (freqs < edges[index + 1])
+                if np.any(mask):
+                    bands[index] = float(np.sqrt(np.mean(np.square(magnitudes[mask]))))
+            peak = float(bands.max(initial=0.0))
+            return (bands / peak).astype(np.float32) if peak else bands
 
         def append_audio(self, audio: np.ndarray, sample_rate: int) -> None:
             samples = np.asarray(audio, dtype=np.float32).reshape(-1)
@@ -284,11 +299,7 @@ def create_main_window(
             self._samples = np.concatenate([self._samples, samples])[-max_samples:]
             window = self._samples[-min(self._samples.size, 4096):]
             if window.size >= 32:
-                shaped = window * np.hanning(window.size)
-                spectrum = np.abs(np.fft.rfft(shaped))
-                spectrum = spectrum[: min(64, spectrum.size)]
-                peak = float(spectrum.max(initial=0.0))
-                self._spectrum = (spectrum / peak).astype(np.float32) if peak else np.zeros(64, dtype=np.float32)
+                self._spectrum = self._speech_band_histogram(window)
             self.update()
 
         def paintEvent(self, event) -> None:  # noqa: N802
@@ -318,7 +329,7 @@ def create_main_window(
                     waveform = np.pad(waveform, (wave_rect.width() - waveform.size, 0))
                 points = []
                 center_y = wave_rect.center().y()
-                amplitude = max(1, wave_rect.height() // 2 - 8)
+                amplitude = max(1, wave_rect.height() // 2 - 2)
                 step = max(1, waveform.size // max(1, wave_rect.width()))
                 reduced = waveform[::step][-wave_rect.width():]
                 for index, value in enumerate(reduced):
@@ -463,7 +474,16 @@ def create_main_window(
     visualize_audio = QtWidgets.QRadioButton("Visualize playback")
     name(visualize_audio, "visualize_playback_radio", "Visualize Playback")
     visualize_audio.setAutoExclusive(False)
-    visualize_audio.setChecked(True)
+    visualize_audio.setChecked(bool(gui_settings.get("visualize_playback", True)))
+    normalize_audio = QtWidgets.QCheckBox("Normalize output level")
+    name(normalize_audio, "normalize_audio_checkbox", "Normalize Output Level")
+    normalize_audio.setChecked(bool(gui_settings.get("audio_normalization", True)))
+    audio_target_peak = QtWidgets.QDoubleSpinBox()
+    name(audio_target_peak, "audio_target_peak_box", "Audio Target Peak")
+    audio_target_peak.setRange(0.1, 0.98)
+    audio_target_peak.setSingleStep(0.05)
+    audio_target_peak.setDecimals(2)
+    audio_target_peak.setValue(float(gui_settings.get("audio_target_peak", 0.85)))
     audio_device = QtWidgets.QComboBox()
     name(audio_device, "audio_device_box", "Audio Device Selector")
     audio_device.addItem("Default output device", None)
@@ -593,6 +613,8 @@ def create_main_window(
     form.addRow("Output File", output_row)
     form.addRow("", play_audio)
     form.addRow("", visualize_audio)
+    form.addRow("", normalize_audio)
+    form.addRow("Target Peak", audio_target_peak)
     form.addRow("Audio Device", audio_device)
     form.addRow("Playback Prebuffer", playback_prebuffer)
     form.addRow("Audio Latency", audio_latency)
@@ -697,7 +719,11 @@ def create_main_window(
                 "audio_device": selected_device,
                 "playback_prebuffer_s": playback_prebuffer.value(),
                 "audio_latency": audio_latency.currentData(),
-                "generation_options": options,
+                "generation_options": options
+                | {
+                    "audio_normalization": normalize_audio.isChecked(),
+                    "audio_target_peak": audio_target_peak.value(),
+                },
             },
             backend_kwargs={
                 "candidate_id": candidate_id,
@@ -724,12 +750,19 @@ def create_main_window(
         window._active_synthesis_bridge = bridge
 
     def set_visualization_enabled(enabled: bool) -> None:
+        gui_settings["visualize_playback"] = enabled
+        _save_gui_settings(gui_settings, settings_path)
         active_event = getattr(window, "_active_visualization_enabled", None)
         if active_event is not None:
             if enabled:
                 active_event.set()
             else:
                 active_event.clear()
+
+    def save_audio_normalization_settings() -> None:
+        gui_settings["audio_normalization"] = normalize_audio.isChecked()
+        gui_settings["audio_target_peak"] = audio_target_peak.value()
+        _save_gui_settings(gui_settings, settings_path)
 
 
     def refresh_stream_report() -> None:
@@ -769,6 +802,8 @@ def create_main_window(
     output_browse.clicked.connect(browse_output)
     synthesis_candidate.currentIndexChanged.connect(refresh_generation_parameters)
     visualize_audio.toggled.connect(set_visualization_enabled)
+    normalize_audio.toggled.connect(lambda _enabled: save_audio_normalization_settings())
+    audio_target_peak.valueChanged.connect(lambda _value: save_audio_normalization_settings())
     stream_button.clicked.connect(run_stream_selected)
     load_stream_report.clicked.connect(refresh_stream_report)
     load_latency_history.clicked.connect(refresh_latency_history)
@@ -787,6 +822,8 @@ def create_main_window(
     window._stream_output_path = output_path
     window._audio_visualizer = audio_visualizer
     window._visualize_playback_radio = visualize_audio
+    window._normalize_audio_checkbox = normalize_audio
+    window._audio_target_peak_box = audio_target_peak
     window._play_audio_checkbox = play_audio
     window._audio_device_box = audio_device
     window._playback_prebuffer_box = playback_prebuffer
