@@ -222,10 +222,10 @@ def synthesize_voxcpm2_streaming(
                 if first_chunk_latency is None:
                     first_chunk_latency = round(now - start, 3)
                 writer.write(audio)
-                if audio_observer is not None:
-                    audio_observer(audio, sample_rate)
                 if audio_sink is not None:
                     audio_sink.write(audio)
+                if audio_observer is not None:
+                    audio_observer(audio, sample_rate)
                 total_samples += int(audio.shape[0])
                 chunks.append(
                     StreamingChunk(

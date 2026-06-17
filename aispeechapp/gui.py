@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import sys
+import time
 import wave
 from pathlib import Path
 
@@ -215,9 +216,17 @@ def create_main_window(
             try:
                 if self._run_voxcpm2:
                     kwargs = dict(self._voxcpm2_kwargs)
+                    last_emit_s = 0.0
 
                     def observe_audio(audio: np.ndarray, sample_rate: int) -> None:
-                        self.audio_chunk.emit(np.asarray(audio, dtype=np.float32).copy(), sample_rate)
+                        nonlocal last_emit_s
+                        now = time.monotonic()
+                        if now - last_emit_s < 0.075:
+                            return
+                        last_emit_s = now
+                        visual_audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+                        stride = max(1, int(visual_audio.shape[0] // 4096))
+                        self.audio_chunk.emit(visual_audio[::stride].copy(), sample_rate)
 
                     kwargs["audio_observer"] = observe_audio
                     result = run_voxcpm2_streaming_func(**kwargs)
@@ -276,9 +285,6 @@ def create_main_window(
                 peak = float(spectrum.max(initial=0.0))
                 self._spectrum = (spectrum / peak).astype(np.float32) if peak else np.zeros(64, dtype=np.float32)
             self.update()
-            app = QtWidgets.QApplication.instance()
-            if app is not None:
-                app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
         def paintEvent(self, event) -> None:  # noqa: N802
             del event
@@ -609,6 +615,22 @@ def create_main_window(
     voxcpm_layout.addWidget(stream_output, 1)
     tabs.addTab(voxcpm_tab, "Synthesis")
 
+    class SynthesisUiBridge(QtCore.QObject):
+        def __init__(self, thread: QtCore.QThread) -> None:
+            super().__init__(window)
+            self._thread = thread
+
+        @QtCore.Slot(object, int)
+        def on_audio_chunk(self, audio: object, sample_rate: int) -> None:
+            audio_visualizer.append_audio(np.asarray(audio, dtype=np.float32), sample_rate)
+
+        @QtCore.Slot(str, str)
+        def on_finished(self, done_candidate_id: str, result: str) -> None:
+            stream_output.setPlainText(result)
+            stream_button.setEnabled(True)
+            window.statusBar().showMessage(f"{candidate_by_id[done_candidate_id].name} complete")
+            self._thread.quit()
+
     def browse_reference() -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             window,
@@ -671,21 +693,18 @@ def create_main_window(
             },
         )
         worker.moveToThread(thread)
+        bridge = SynthesisUiBridge(thread)
 
-        def finish_stream_run(done_candidate_id: str, result: str) -> None:
-            stream_output.setPlainText(result)
-            stream_button.setEnabled(True)
-            window.statusBar().showMessage(f"{candidate_by_id[done_candidate_id].name} complete")
-            thread.quit()
-
-        worker.audio_chunk.connect(audio_visualizer.append_audio)
-        worker.finished.connect(finish_stream_run)
+        worker.audio_chunk.connect(bridge.on_audio_chunk, QtCore.Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(bridge.on_finished, QtCore.Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(worker.deleteLater)
         thread.started.connect(worker.run)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(bridge.deleteLater)
         thread.start()
         window._active_synthesis_thread = thread
         window._active_synthesis_worker = worker
+        window._active_synthesis_bridge = bridge
 
     def refresh_stream_report() -> None:
         if DEFAULT_REPORT_PATH.exists():
