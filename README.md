@@ -68,7 +68,7 @@ Metadata smoke tab:
 
 ![AISpeechApp metadata smoke tab](docs/images/gui-metadata-smoke.png)
 
-Synthesis tab with VoxCPM2 voice cloning controls:
+Synthesis tab with VoxCPM2 voice cloning controls and live audio visualization:
 
 ![AISpeechApp synthesis tab with VoxCPM2 controls](docs/images/gui-synthesis-controls.png)
 
@@ -102,6 +102,10 @@ real streaming generation may still pay model load time but later generations
 reuse the loaded model. Playback defaults favor smooth output: `0.45s`
 prebuffer and high PortAudio latency. Lower those controls only when tuning for
 minimum start latency.
+
+During streaming playback, the GUI renders a realtime waveform and compact
+frequency spectrum from the same audio chunks that are written to disk and sent
+to the selected output device.
 
 Model-specific generation controls are declared in
 `configs\candidates.json` under each candidate's `generation_parameters` list.

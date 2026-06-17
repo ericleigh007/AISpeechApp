@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 from PySide6 import QtTest, QtWidgets
 
 from aispeechapp.gui import create_main_window
@@ -49,6 +50,7 @@ class StreamCall:
     playback_prebuffer_s: float
     audio_latency: str | None
     generation_options: dict[str, object]
+    audio_observer: object
 
 
 def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_path):
@@ -56,6 +58,7 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_pat
     calls: list[StreamCall] = []
 
     def fake_stream(**kwargs):
+        kwargs["audio_observer"](np.ones(512, dtype=np.float32) * 0.25, 16000)
         calls.append(StreamCall(**kwargs))
         return "stream ok"
 
@@ -107,11 +110,31 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_pat
                 "min_len": 2,
                 "max_len": 4096,
             },
+            audio_observer=_find(window, "audio_visualizer").append_audio,
         )
     ]
     assert output.toPlainText() == "stream ok"
     assert button.isEnabled()
     assert window.statusBar().currentMessage() == "VoxCPM2 complete"
+    assert _find(window, "audio_visualizer").sample_count == 512
+    assert _find(window, "audio_visualizer").spectrum_peak > 0.0
+
+
+def test_gui_audio_visualizer_updates_from_audio(tmp_path):
+    _app()
+    window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        settings_path=tmp_path / "settings.local.json",
+    )
+    visualizer = _find(window, "audio_visualizer")
+
+    visualizer.append_audio(np.sin(np.linspace(0, np.pi * 8, 2048, dtype=np.float32)), 48000)
+    pixmap = visualizer.grab()
+
+    assert visualizer.sample_count == 2048
+    assert visualizer.spectrum_peak > 0.0
+    assert not pixmap.isNull()
 
 
 def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):

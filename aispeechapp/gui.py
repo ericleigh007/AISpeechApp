@@ -9,6 +9,8 @@ import sys
 import wave
 from pathlib import Path
 
+import numpy as np
+
 from aispeechapp.candidates import PROJECT_ROOT, load_candidates
 from aispeechapp.voxcpm2_streaming import (
     DEFAULT_HISTORY_PATH,
@@ -96,6 +98,7 @@ def _run_voxcpm2_streaming(
     playback_prebuffer_s: float,
     audio_latency: str | None,
     generation_options: dict[str, object] | None = None,
+    audio_observer=None,
 ) -> str:
     options = generation_options or {}
     result = synthesize_voxcpm2_streaming(
@@ -115,6 +118,7 @@ def _run_voxcpm2_streaming(
         retry_badcase=bool(options.get("retry_badcase", False)),
         retry_badcase_max_times=int(options.get("retry_badcase_max_times", 3)),
         retry_badcase_ratio_threshold=float(options.get("retry_badcase_ratio_threshold", 6.0)),
+        audio_observer=audio_observer,
     )
     write_streaming_report(result, DEFAULT_REPORT_PATH)
     append_streaming_history(result, DEFAULT_HISTORY_PATH)
@@ -192,6 +196,98 @@ def create_main_window(
         widget.setObjectName(object_name)
         widget.setAccessibleName(accessible_name or object_name)
         return widget
+
+    class AudioVisualizer(QtWidgets.QWidget):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sample_rate = 48000
+            self._samples = np.zeros(0, dtype=np.float32)
+            self._spectrum = np.zeros(64, dtype=np.float32)
+            self.setMinimumHeight(150)
+            self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+
+        @property
+        def sample_count(self) -> int:
+            return int(self._samples.shape[0])
+
+        @property
+        def spectrum_peak(self) -> float:
+            return float(self._spectrum.max(initial=0.0))
+
+        def clear(self) -> None:
+            self._samples = np.zeros(0, dtype=np.float32)
+            self._spectrum = np.zeros(64, dtype=np.float32)
+            self.update()
+
+        def append_audio(self, audio: np.ndarray, sample_rate: int) -> None:
+            samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+            if samples.size == 0:
+                return
+            self._sample_rate = sample_rate
+            max_samples = max(1, sample_rate * 2)
+            self._samples = np.concatenate([self._samples, samples])[-max_samples:]
+            window = self._samples[-min(self._samples.size, 4096):]
+            if window.size >= 32:
+                shaped = window * np.hanning(window.size)
+                spectrum = np.abs(np.fft.rfft(shaped))
+                spectrum = spectrum[: min(64, spectrum.size)]
+                peak = float(spectrum.max(initial=0.0))
+                self._spectrum = (spectrum / peak).astype(np.float32) if peak else np.zeros(64, dtype=np.float32)
+            self.update()
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+        def paintEvent(self, event) -> None:  # noqa: N802
+            del event
+            painter = QtWidgets.QStylePainter(self)
+            rect = self.rect().adjusted(8, 8, -8, -8)
+            painter.fillRect(rect, self.palette().color(self.backgroundRole()).darker(115))
+            painter.setPen(self.palette().color(self.foregroundRole()).darker(140))
+            painter.drawRect(rect)
+            if rect.width() <= 4 or rect.height() <= 4:
+                return
+
+            wave_rect = QtCore.QRect(rect.left() + 8, rect.top() + 8, rect.width() - 16, rect.height() // 2 - 12)
+            spec_rect = QtCore.QRect(
+                rect.left() + 8,
+                rect.center().y() + 8,
+                rect.width() - 16,
+                rect.bottom() - rect.center().y() - 16,
+            )
+            painter.setPen(self.palette().color(self.foregroundRole()).darker(120))
+            painter.drawText(wave_rect.adjusted(0, 0, 0, -wave_rect.height() + 18), "Waveform")
+            painter.drawText(spec_rect.adjusted(0, 0, 0, -spec_rect.height() + 18), "Spectrum")
+
+            waveform = self._samples[-max(1, wave_rect.width()):]
+            if waveform.size:
+                if waveform.size < wave_rect.width():
+                    waveform = np.pad(waveform, (wave_rect.width() - waveform.size, 0))
+                points = []
+                center_y = wave_rect.center().y()
+                amplitude = max(1, wave_rect.height() // 2 - 8)
+                step = max(1, waveform.size // max(1, wave_rect.width()))
+                reduced = waveform[::step][-wave_rect.width():]
+                for index, value in enumerate(reduced):
+                    x = wave_rect.left() + index
+                    y = center_y - int(float(np.clip(value, -1.0, 1.0)) * amplitude)
+                    points.append(QtCore.QPoint(x, y))
+                painter.setPen(QtCore.Qt.GlobalColor.cyan)
+                if len(points) > 1:
+                    painter.drawPolyline(points)
+                painter.setPen(self.palette().color(self.foregroundRole()).darker(150))
+                painter.drawLine(wave_rect.left(), center_y, wave_rect.right(), center_y)
+
+            if self._spectrum.size:
+                bar_count = int(self._spectrum.size)
+                bar_width = max(2, spec_rect.width() // max(1, bar_count))
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(QtCore.Qt.GlobalColor.green)
+                for index, magnitude in enumerate(self._spectrum):
+                    height = int(float(magnitude) * max(1, spec_rect.height() - 20))
+                    x = spec_rect.left() + index * bar_width
+                    y = spec_rect.bottom() - height
+                    painter.drawRect(x, y, max(1, bar_width - 1), height)
 
     candidates = load_candidates()
     candidate_by_id = {candidate.id: candidate for candidate in candidates}
@@ -462,8 +558,11 @@ def create_main_window(
     name(stream_output, "stream_output", "Streaming Output")
     stream_output.setReadOnly(True)
     stream_output.setPlainText("Run VoxCPM2 streaming to populate this panel.")
+    audio_visualizer = AudioVisualizer()
+    name(audio_visualizer, "audio_visualizer", "Realtime Audio Visualizer")
     voxcpm_layout.addLayout(form)
     voxcpm_layout.addWidget(parameter_box)
+    voxcpm_layout.addWidget(audio_visualizer)
     voxcpm_layout.addLayout(stream_controls)
     voxcpm_layout.addWidget(stream_output, 1)
     tabs.addTab(voxcpm_tab, "Synthesis")
@@ -501,6 +600,7 @@ def create_main_window(
         candidate_name = candidate_by_id[candidate_id].name
         window.statusBar().showMessage(f"Running {candidate_name}")
         stream_output.setPlainText(f"Running {candidate_name}...")
+        audio_visualizer.clear()
         QtCore.QTimer.singleShot(10, finish_stream_run)
 
     def finish_stream_run() -> None:
@@ -519,6 +619,7 @@ def create_main_window(
                     playback_prebuffer_s=playback_prebuffer.value(),
                     audio_latency=audio_latency.currentData(),
                     generation_options=options,
+                    audio_observer=audio_visualizer.append_audio,
                 )
             )
         else:
@@ -587,6 +688,7 @@ def create_main_window(
     window._voice_reference_box = voice_combo
     window._reference_path = reference_path
     window._stream_output_path = output_path
+    window._audio_visualizer = audio_visualizer
     window._play_audio_checkbox = play_audio
     window._audio_device_box = audio_device
     window._playback_prebuffer_box = playback_prebuffer
@@ -621,9 +723,17 @@ def _demo_streaming(
     playback_prebuffer_s: float = 0.45,
     audio_latency: str | None = "high",
     generation_options: dict[str, object] | None = None,
+    audio_observer=None,
 ) -> str:
     output_file = Path(output_path)
     audio_sha256 = _write_demo_wav(output_file, text=text, reference_wav_path=reference_wav_path)
+    if audio_observer is not None:
+        sample_rate = 16000
+        for chunk_index in range(8):
+            offset = chunk_index * 800
+            samples = np.arange(offset, offset + 800, dtype=np.float32) / sample_rate
+            audio = 0.22 * np.sin(2 * math.pi * (220 + chunk_index * 35) * samples)
+            audio_observer(audio.astype(np.float32), sample_rate)
     payload = {
         "demo": True,
         "text": text,

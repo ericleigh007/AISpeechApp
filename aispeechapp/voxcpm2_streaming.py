@@ -37,6 +37,7 @@ class AudioSink(Protocol):
 
 ModelFactory = Callable[[], VoxCPM2StreamingModel]
 AudioSinkFactory = Callable[[int, str | int | None, float, str | float | None], AudioSink]
+AudioObserver = Callable[[np.ndarray, int], None]
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,7 @@ def synthesize_voxcpm2_streaming(
     audio_latency: str | float | None = "high",
     model_factory: ModelFactory = _default_model_factory,
     audio_sink_factory: AudioSinkFactory = SoundDeviceSink,
+    audio_observer: AudioObserver | None = None,
     clock: Callable[[], float] = time.perf_counter,
 ) -> StreamingSynthesisResult:
     if not text.strip():
@@ -220,6 +222,8 @@ def synthesize_voxcpm2_streaming(
                 if first_chunk_latency is None:
                     first_chunk_latency = round(now - start, 3)
                 writer.write(audio)
+                if audio_observer is not None:
+                    audio_observer(audio, sample_rate)
                 if audio_sink is not None:
                     audio_sink.write(audio)
                 total_samples += int(audio.shape[0])
