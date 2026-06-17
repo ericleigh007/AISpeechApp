@@ -83,16 +83,24 @@ small two-prompt/two-voice streaming matrix, verifies that each selected voice
 produces a distinct WAV artifact, and writes
 `outputs\desktop_demo\desktop_demo_probe.json`.
 
-The VoxCPM2 streaming tab keeps the model in-process for the GUI session, so
-the first real generation may still pay model load time but later generations
+The synthesis tab keeps VoxCPM2 in-process for the GUI session, so the first
+real streaming generation may still pay model load time but later generations
 reuse the loaded model. Playback defaults favor smooth output: `0.45s`
 prebuffer and high PortAudio latency. Lower those controls only when tuning for
 minimum start latency.
 
+Model-specific generation controls are declared in
+`configs\candidates.json` under each candidate's `generation_parameters` list.
+The GUI reads that metadata when a model is selected and shows only controls the
+selected backend currently supports. VoxCPM2 exposes guidance, inference steps,
+text normalization, denoise, retry, and min/max generation length controls;
+Qwen3-TTS exposes speaker/max-token controls; dots.tts exposes steps and
+guidance.
+
 ## Batch Backend Outputs
 
 The backend synthesis helper supports non-streaming file generation for the
-new OmniVoice and VibeVoice 1.5B candidates:
+batch candidates exposed by the GUI, including OmniVoice and VibeVoice 1.5B:
 
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\synthesize_backend.py `

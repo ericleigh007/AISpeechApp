@@ -58,6 +58,17 @@ Batch MP3 output is handled by writing a temporary WAV and encoding with
 FFmpeg/libmp3lame. The unit suite verifies both WAV and MP3 output paths without
 requiring heavyweight model downloads.
 
+Generation controls now live in `configs/candidates.json` as candidate metadata
+so the native GUI can change controls when the selected backend changes.
+Currently exposed:
+
+| Candidate | Exposed controls |
+| --- | --- |
+| VoxCPM2 | `cfg_value`, `inference_timesteps`, `normalize`, `denoise`, `retry_badcase`, `retry_badcase_max_times`, `retry_badcase_ratio_threshold`, `min_len`, `max_len` |
+| Qwen3-TTS CustomVoice | `max_new_tokens`, `speaker` |
+| dots.tts soar / mf | `num_steps`, `guidance_scale` |
+| IndexTTS2, OmniVoice, VibeVoice 1.5B | No stable extra controls exposed yet. The GUI displays a no-controls state for these backends. |
+
 ## 2026-06-16 Refresh Findings
 
 | Candidate | Last modified on HF | Current disposition |

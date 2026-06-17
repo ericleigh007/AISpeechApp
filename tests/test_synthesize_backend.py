@@ -80,6 +80,34 @@ def test_synthesize_backend_routes_vibevoice(monkeypatch, tmp_path: Path):
     assert calls == [("hello", tmp_path / "out.wav")]
 
 
+def test_synthesize_backend_routes_voxcpm2_options(monkeypatch, tmp_path: Path):
+    module = _load_backend_module()
+    calls = []
+    monkeypatch.setattr(module, "_write_voxcpm2", lambda text, output, options: calls.append((text, output, options)))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "synthesize_backend.py",
+            "--candidate",
+            "voxcpm2",
+            "--text",
+            "hello",
+            "--language-code",
+            "en",
+            "--language-hint",
+            "English",
+            "--output",
+            str(tmp_path / "out.wav"),
+            "--options-json",
+            '{"cfg_value": 2.4, "inference_timesteps": 12}',
+        ],
+    )
+
+    assert module.main() == 0
+    assert calls == [("hello", tmp_path / "out.wav", {"cfg_value": 2.4, "inference_timesteps": 12})]
+
+
 def test_write_audio_file_wav(tmp_path: Path):
     module = _load_backend_module()
     output = tmp_path / "tone.wav"

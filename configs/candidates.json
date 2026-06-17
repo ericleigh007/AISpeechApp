@@ -8,6 +8,26 @@
       "backend": "qwen3_tts",
       "expected_imports": ["qwen_tts", "torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "voice_design", "multilingual"],
+      "generation_parameters": [
+        {
+          "id": "max_new_tokens",
+          "label": "Max New Tokens",
+          "type": "int",
+          "default": 512,
+          "min": 128,
+          "max": 2048,
+          "step": 64,
+          "description": "Generation budget for the Qwen custom-voice decoder."
+        },
+        {
+          "id": "speaker",
+          "label": "Speaker",
+          "type": "choice",
+          "default": "Ryan",
+          "choices": ["Ryan"],
+          "description": "Built-in Qwen speaker seed used by the custom-voice API."
+        }
+      ],
       "notes": "Primary local high-quality baseline."
     },
     {
@@ -18,6 +38,89 @@
       "backend": "voxcpm2",
       "expected_imports": ["torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz"],
+      "generation_parameters": [
+        {
+          "id": "cfg_value",
+          "label": "Guidance",
+          "type": "float",
+          "default": 2.0,
+          "min": 0.5,
+          "max": 5.0,
+          "step": 0.1,
+          "description": "Classifier-free guidance scale; higher values can sound more forceful but less stable."
+        },
+        {
+          "id": "inference_timesteps",
+          "label": "Inference Steps",
+          "type": "int",
+          "default": 10,
+          "min": 4,
+          "max": 40,
+          "step": 1,
+          "description": "Diffusion inference steps; more steps can improve stability at higher latency."
+        },
+        {
+          "id": "normalize",
+          "label": "Normalize Text",
+          "type": "bool",
+          "default": true,
+          "description": "Run VoxCPM text normalization before synthesis."
+        },
+        {
+          "id": "denoise",
+          "label": "Denoise Reference",
+          "type": "bool",
+          "default": false,
+          "description": "Denoise prompt/reference audio when the model was loaded with denoiser support."
+        },
+        {
+          "id": "retry_badcase",
+          "label": "Retry Badcase",
+          "type": "bool",
+          "default": false,
+          "description": "Retry outputs that trip VoxCPM's audio/text ratio heuristic."
+        },
+        {
+          "id": "retry_badcase_max_times",
+          "label": "Retry Limit",
+          "type": "int",
+          "default": 3,
+          "min": 0,
+          "max": 8,
+          "step": 1,
+          "description": "Maximum retries when badcase retry is enabled."
+        },
+        {
+          "id": "retry_badcase_ratio_threshold",
+          "label": "Retry Ratio",
+          "type": "float",
+          "default": 6.0,
+          "min": 2.0,
+          "max": 12.0,
+          "step": 0.5,
+          "description": "Audio-to-text ratio threshold used by VoxCPM badcase detection."
+        },
+        {
+          "id": "min_len",
+          "label": "Min Length",
+          "type": "int",
+          "default": 2,
+          "min": 1,
+          "max": 64,
+          "step": 1,
+          "description": "Minimum generation length passed to VoxCPM."
+        },
+        {
+          "id": "max_len",
+          "label": "Max Length",
+          "type": "int",
+          "default": 4096,
+          "min": 512,
+          "max": 8192,
+          "step": 256,
+          "description": "Maximum token length passed to VoxCPM."
+        }
+      ],
       "notes": "Primary challenger; tokenizer-free diffusion-autoregressive stack."
     },
     {
@@ -35,6 +138,28 @@
         "python_api",
         "cli",
         "fine_tuning"
+      ],
+      "generation_parameters": [
+        {
+          "id": "num_steps",
+          "label": "Steps",
+          "type": "int",
+          "default": 10,
+          "min": 4,
+          "max": 40,
+          "step": 1,
+          "description": "Sampling steps for dots.tts."
+        },
+        {
+          "id": "guidance_scale",
+          "label": "Guidance",
+          "type": "float",
+          "default": 1.2,
+          "min": 0.5,
+          "max": 3.0,
+          "step": 0.1,
+          "description": "Guidance scale for dots.tts continuation cloning."
+        }
       ],
       "notes": "Main dots.tts quality candidate: highest zero-shot fidelity and speaker similarity variant."
     },
@@ -86,6 +211,28 @@
       "backend": "dots_tts",
       "expected_imports": ["torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "multilingual", "48khz", "low_latency", "python_api", "cli"],
+      "generation_parameters": [
+        {
+          "id": "num_steps",
+          "label": "Steps",
+          "type": "int",
+          "default": 10,
+          "min": 2,
+          "max": 24,
+          "step": 1,
+          "description": "Sampling steps for the MeanFlow latency variant."
+        },
+        {
+          "id": "guidance_scale",
+          "label": "Guidance",
+          "type": "float",
+          "default": 1.2,
+          "min": 0.5,
+          "max": 3.0,
+          "step": 0.1,
+          "description": "Guidance scale for dots.tts continuation cloning."
+        }
+      ],
       "notes": "MeanFlow distilled dots.tts latency candidate; compare quality/latency against soar."
     },
     {

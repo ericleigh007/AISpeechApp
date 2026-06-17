@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -54,7 +55,14 @@ def _write_audio_file(output: Path, audio: np.ndarray, sample_rate: int) -> None
         temp_wav.unlink(missing_ok=True)
 
 
-def _write_qwen3(candidate: str, text: str, language_code: str, language_hint: str, output: Path) -> None:
+def _write_qwen3(
+    candidate: str,
+    text: str,
+    language_code: str,
+    language_hint: str,
+    output: Path,
+    options: dict[str, object],
+) -> None:
     import torch
     from qwen_tts import Qwen3TTSModel
 
@@ -65,7 +73,7 @@ def _write_qwen3(candidate: str, text: str, language_code: str, language_hint: s
         dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
         attn_implementation="sdpa",
     )
-    speaker = "Ryan"
+    speaker = str(options.get("speaker", "Ryan"))
     instruct = "Speak clearly in a natural studio narration voice."
     if language_code == "pt-PT":
         instruct = (
@@ -77,12 +85,12 @@ def _write_qwen3(candidate: str, text: str, language_code: str, language_hint: s
         language=language_hint,
         speaker=speaker,
         instruct=instruct,
-        max_new_tokens=512,
+        max_new_tokens=int(options.get("max_new_tokens", 512)),
     )
     sf.write(output, wavs[0], sr)
 
 
-def _write_voxcpm2(text: str, output: Path) -> None:
+def _write_voxcpm2(text: str, output: Path, options: dict[str, object]) -> None:
     from voxcpm import VoxCPM
 
     model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
@@ -90,18 +98,20 @@ def _write_voxcpm2(text: str, output: Path) -> None:
         text=text,
         prompt_wav_path=None,
         prompt_text=None,
-        cfg_value=2.0,
-        inference_timesteps=10,
-        normalize=True,
-        denoise=False,
-        retry_badcase=True,
-        retry_badcase_max_times=3,
-        retry_badcase_ratio_threshold=6.0,
+        cfg_value=float(options.get("cfg_value", 2.0)),
+        inference_timesteps=int(options.get("inference_timesteps", 10)),
+        min_len=int(options.get("min_len", 2)),
+        max_len=int(options.get("max_len", 4096)),
+        normalize=bool(options.get("normalize", True)),
+        denoise=bool(options.get("denoise", False)),
+        retry_badcase=bool(options.get("retry_badcase", True)),
+        retry_badcase_max_times=int(options.get("retry_badcase_max_times", 3)),
+        retry_badcase_ratio_threshold=float(options.get("retry_badcase_ratio_threshold", 6.0)),
     )
     sf.write(output, wav, VOXCPM2_SAMPLE_RATE)
 
 
-def _write_dots_tts(candidate: str, text: str, output: Path) -> None:
+def _write_dots_tts(candidate: str, text: str, output: Path, options: dict[str, object]) -> None:
     from dots_tts.runtime import DotsTtsRuntime
 
     ref_audio = Path("voice_refs/first_impression.wav")
@@ -118,8 +128,8 @@ def _write_dots_tts(candidate: str, text: str, output: Path) -> None:
         text=text,
         prompt_audio_path=str(ref_audio),
         prompt_text=ref_text.read_text(encoding="utf-8").strip(),
-        num_steps=10,
-        guidance_scale=1.2,
+        num_steps=int(options.get("num_steps", 10)),
+        guidance_scale=float(options.get("guidance_scale", 1.2)),
     )
     sf.write(output, result["audio"].float().cpu().squeeze().numpy(), result["sample_rate"])
 
@@ -205,11 +215,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language-code", required=True)
     parser.add_argument("--language-hint", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--options-json", default="{}")
     args = parser.parse_args()
     if args.text_file:
         args.text = args.text_file.read_text(encoding="utf-8").strip()
     if not args.text:
         parser.error("Pass --text or --text-file.")
+    try:
+        args.options = json.loads(args.options_json)
+    except json.JSONDecodeError as exc:
+        parser.error(f"--options-json must be valid JSON: {exc}")
+    if not isinstance(args.options, dict):
+        parser.error("--options-json must decode to a JSON object.")
     return args
 
 
@@ -217,11 +234,18 @@ def main() -> int:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.candidate == "qwen3_tts_17b_customvoice":
-        _write_qwen3(args.candidate, args.text, args.language_code, args.language_hint, args.output)
+        _write_qwen3(
+            args.candidate,
+            args.text,
+            args.language_code,
+            args.language_hint,
+            args.output,
+            args.options,
+        )
     elif args.candidate == "voxcpm2":
-        _write_voxcpm2(args.text, args.output)
+        _write_voxcpm2(args.text, args.output, args.options)
     elif args.candidate in {"dots_tts_soar", "dots_tts_mf"}:
-        _write_dots_tts(args.candidate, args.text, args.output)
+        _write_dots_tts(args.candidate, args.text, args.output, args.options)
     elif args.candidate == "indextts2":
         _write_indextts2(args.text, args.output)
     elif args.candidate == "omnivoice":

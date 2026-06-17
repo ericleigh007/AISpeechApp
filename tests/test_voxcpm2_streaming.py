@@ -79,8 +79,50 @@ def test_streaming_synthesis_writes_chunks_and_latency(tmp_path: Path):
     assert model.calls[0]["reference_wav_path"] == str(reference)
     assert model.calls[0]["cfg_value"] == 2.0
     assert model.calls[0]["inference_timesteps"] == 10
+    assert model.calls[0]["min_len"] == 2
+    assert model.calls[0]["max_len"] == 4096
     assert model.calls[0]["normalize"] is True
     assert model.calls[0]["denoise"] is False
+    assert model.calls[0]["retry_badcase"] is False
+
+
+def test_streaming_synthesis_passes_generation_knobs(tmp_path: Path):
+    model = FakeStreamingModel([np.ones(240, dtype=np.float32)])
+
+    result = synthesize_voxcpm2_streaming(
+        text="Hello from VoxCPM2.",
+        output_path=tmp_path / "out.wav",
+        cfg_value=2.8,
+        inference_timesteps=14,
+        min_len=4,
+        max_len=2048,
+        normalize=False,
+        denoise=True,
+        retry_badcase=True,
+        retry_badcase_max_times=5,
+        retry_badcase_ratio_threshold=4.5,
+        model_factory=lambda: model,
+        clock=FakeClock([0.0, 0.1, 0.2]),
+    )
+
+    assert result.cfg_value == 2.8
+    assert result.inference_timesteps == 14
+    assert result.min_len == 4
+    assert result.max_len == 2048
+    assert result.normalize is False
+    assert result.denoise is True
+    assert result.retry_badcase is True
+    assert result.retry_badcase_max_times == 5
+    assert result.retry_badcase_ratio_threshold == 4.5
+    assert model.calls[0]["cfg_value"] == 2.8
+    assert model.calls[0]["inference_timesteps"] == 14
+    assert model.calls[0]["min_len"] == 4
+    assert model.calls[0]["max_len"] == 2048
+    assert model.calls[0]["normalize"] is False
+    assert model.calls[0]["denoise"] is True
+    assert model.calls[0]["retry_badcase"] is True
+    assert model.calls[0]["retry_badcase_max_times"] == 5
+    assert model.calls[0]["retry_badcase_ratio_threshold"] == 4.5
 
 
 def test_streaming_synthesis_can_play_chunks_to_audio_sink(tmp_path: Path):

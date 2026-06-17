@@ -57,7 +57,13 @@ class StreamingSynthesisResult:
     sample_rate: int
     cfg_value: float
     inference_timesteps: int
+    min_len: int
+    max_len: int
     normalize: bool
+    denoise: bool
+    retry_badcase: bool
+    retry_badcase_max_times: int
+    retry_badcase_ratio_threshold: float
     chunk_count: int
     first_chunk_latency_s: float | None
     total_elapsed_s: float
@@ -153,7 +159,13 @@ def synthesize_voxcpm2_streaming(
     prompt_text: str | None = None,
     cfg_value: float = 2.0,
     inference_timesteps: int = 10,
+    min_len: int = 2,
+    max_len: int = 4096,
     normalize: bool = True,
+    denoise: bool = False,
+    retry_badcase: bool = False,
+    retry_badcase_max_times: int = 3,
+    retry_badcase_ratio_threshold: float = 6.0,
     sample_rate: int = VOXCPM2_SAMPLE_RATE,
     play_audio: bool = False,
     audio_device: str | int | None = None,
@@ -194,11 +206,13 @@ def synthesize_voxcpm2_streaming(
                     reference_wav_path=str(reference_wav_path) if reference_wav_path else None,
                     cfg_value=cfg_value,
                     inference_timesteps=inference_timesteps,
+                    min_len=min_len,
+                    max_len=max_len,
                     normalize=normalize,
-                    denoise=False,
-                    retry_badcase=False,
-                    retry_badcase_max_times=3,
-                    retry_badcase_ratio_threshold=6.0,
+                    denoise=denoise,
+                    retry_badcase=retry_badcase,
+                    retry_badcase_max_times=retry_badcase_max_times,
+                    retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
                 )
             ):
                 now = clock()
@@ -245,7 +259,13 @@ def synthesize_voxcpm2_streaming(
         sample_rate=sample_rate,
         cfg_value=cfg_value,
         inference_timesteps=inference_timesteps,
+        min_len=min_len,
+        max_len=max_len,
         normalize=normalize,
+        denoise=denoise,
+        retry_badcase=retry_badcase,
+        retry_badcase_max_times=retry_badcase_max_times,
+        retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
         chunk_count=len(chunks),
         first_chunk_latency_s=first_chunk_latency,
         total_elapsed_s=total_elapsed,
@@ -295,6 +315,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--audio-device")
     parser.add_argument("--playback-prebuffer-s", type=float, default=0.45)
     parser.add_argument("--audio-latency", default="high")
+    parser.add_argument("--cfg-value", type=float, default=2.0)
+    parser.add_argument("--inference-timesteps", type=int, default=10)
+    parser.add_argument("--min-len", type=int, default=2)
+    parser.add_argument("--max-len", type=int, default=4096)
+    parser.add_argument("--normalize", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--denoise", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--retry-badcase", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--retry-badcase-max-times", type=int, default=3)
+    parser.add_argument("--retry-badcase-ratio-threshold", type=float, default=6.0)
     return parser.parse_args(argv)
 
 
@@ -306,6 +335,15 @@ def main(argv: list[str] | None = None) -> int:
         reference_wav_path=args.reference_wav_path,
         prompt_wav_path=args.prompt_wav_path,
         prompt_text=args.prompt_text,
+        cfg_value=args.cfg_value,
+        inference_timesteps=args.inference_timesteps,
+        min_len=args.min_len,
+        max_len=args.max_len,
+        normalize=args.normalize,
+        denoise=args.denoise,
+        retry_badcase=args.retry_badcase,
+        retry_badcase_max_times=args.retry_badcase_max_times,
+        retry_badcase_ratio_threshold=args.retry_badcase_ratio_threshold,
         play_audio=args.play_audio,
         audio_device=args.audio_device,
         playback_prebuffer_s=args.playback_prebuffer_s,

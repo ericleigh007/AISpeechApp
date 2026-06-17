@@ -47,6 +47,7 @@ class StreamCall:
     audio_device: str | None
     playback_prebuffer_s: float
     audio_latency: str | None
+    generation_options: dict[str, object]
 
 
 def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output():
@@ -74,6 +75,10 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output():
     _find(window, "playback_prebuffer_box").setValue(0.65)
     latency = _find(window, "audio_latency_box")
     latency.setCurrentIndex(1)
+    guidance = _find(window, "generation_parameter_cfg_value")
+    guidance.setValue(2.7)
+    steps = _find(window, "generation_parameter_inference_timesteps")
+    steps.setValue(14)
 
     button = _find(window, "run_stream_button")
     output = _find(window, "stream_output")
@@ -89,8 +94,61 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output():
             audio_device="7: Test Speakers",
             playback_prebuffer_s=0.65,
             audio_latency="low",
+            generation_options={
+                "cfg_value": 2.7,
+                "inference_timesteps": 14,
+                "normalize": True,
+                "denoise": False,
+                "retry_badcase": False,
+                "retry_badcase_max_times": 3,
+                "retry_badcase_ratio_threshold": 6.0,
+                "min_len": 2,
+                "max_len": 4096,
+            },
         )
     ]
     assert output.toPlainText() == "stream ok"
     assert button.isEnabled()
-    assert window.statusBar().currentMessage() == "VoxCPM2 streaming complete"
+    assert window.statusBar().currentMessage() == "VoxCPM2 complete"
+
+
+def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):
+    _app()
+    calls: list[dict] = []
+
+    def fake_backend(**kwargs):
+        calls.append(kwargs)
+        return "backend ok"
+
+    window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        run_backend_synthesis_func=fake_backend,
+    )
+
+    tabs = _find(window, "main_tabs")
+    tabs.setCurrentIndex(1)
+    candidate_box = _find(window, "synthesis_candidate_box")
+    candidate_box.setCurrentIndex(candidate_box.findData("dots_tts_soar"))
+    _find(window, "stream_text").setPlainText("hello dots")
+    _find(window, "stream_output_path").setText(str(tmp_path / "dots.wav"))
+    _find(window, "generation_parameter_num_steps").setValue(12)
+    _find(window, "generation_parameter_guidance_scale").setValue(1.4)
+
+    button = _find(window, "run_stream_button")
+    output = _find(window, "stream_output")
+    button.click()
+    QtTest.QTest.qWait(30)
+
+    assert calls == [
+        {
+            "candidate_id": "dots_tts_soar",
+            "text": "hello dots",
+            "output_path": str(tmp_path / "dots.wav"),
+            "language_code": "en",
+            "language_hint": "English",
+            "generation_options": {"num_steps": 12, "guidance_scale": 1.4},
+        }
+    ]
+    assert output.toPlainText() == "backend ok"
+    assert window.statusBar().currentMessage() == "dots.tts soar complete"

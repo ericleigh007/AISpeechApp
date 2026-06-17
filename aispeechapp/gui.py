@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import subprocess
 import sys
 import wave
 from pathlib import Path
@@ -78,7 +79,9 @@ def _run_voxcpm2_streaming(
     audio_device: str | None,
     playback_prebuffer_s: float,
     audio_latency: str | None,
+    generation_options: dict[str, object] | None = None,
 ) -> str:
+    options = generation_options or {}
     result = synthesize_voxcpm2_streaming(
         text=text,
         output_path=Path(output_path),
@@ -87,10 +90,70 @@ def _run_voxcpm2_streaming(
         audio_device=audio_device.split(":", 1)[0] if audio_device else None,
         playback_prebuffer_s=playback_prebuffer_s,
         audio_latency=audio_latency,
+        cfg_value=float(options.get("cfg_value", 2.0)),
+        inference_timesteps=int(options.get("inference_timesteps", 10)),
+        min_len=int(options.get("min_len", 2)),
+        max_len=int(options.get("max_len", 4096)),
+        normalize=bool(options.get("normalize", True)),
+        denoise=bool(options.get("denoise", False)),
+        retry_badcase=bool(options.get("retry_badcase", False)),
+        retry_badcase_max_times=int(options.get("retry_badcase_max_times", 3)),
+        retry_badcase_ratio_threshold=float(options.get("retry_badcase_ratio_threshold", 6.0)),
     )
     write_streaming_report(result, DEFAULT_REPORT_PATH)
     append_streaming_history(result, DEFAULT_HISTORY_PATH)
     return json.dumps(result.__dict__ | {"chunks": [chunk.__dict__ for chunk in result.chunks]}, indent=2)
+
+
+def _run_backend_synthesis(
+    *,
+    candidate_id: str,
+    text: str,
+    output_path: str,
+    language_code: str,
+    language_hint: str,
+    generation_options: dict[str, object] | None = None,
+) -> str:
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "synthesize_backend.py"),
+        "--candidate",
+        candidate_id,
+        "--text",
+        text,
+        "--language-code",
+        language_code,
+        "--language-hint",
+        language_hint,
+        "--output",
+        output_path,
+        "--options-json",
+        json.dumps(generation_options or {}),
+    ]
+    started = __import__("time").perf_counter()
+    completed = subprocess.run(
+        cmd,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    elapsed = round(__import__("time").perf_counter() - started, 3)
+    payload = {
+        "candidate_id": candidate_id,
+        "output_path": output_path,
+        "elapsed_s": elapsed,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "generation_options": generation_options or {},
+    }
+    if completed.returncode != 0:
+        payload["status"] = "failed"
+    else:
+        payload["status"] = "complete"
+        payload["output_exists"] = Path(output_path).exists()
+    return json.dumps(payload, indent=2)
 
 
 def create_main_window(
@@ -100,6 +163,7 @@ def create_main_window(
     load_audio_devices_func=_load_audio_devices,
     load_voice_references_func=_load_voice_references,
     run_voxcpm2_streaming_func=_run_voxcpm2_streaming,
+    run_backend_synthesis_func=_run_backend_synthesis,
 ):
     from PySide6 import QtCore, QtWidgets
 
@@ -111,6 +175,9 @@ def create_main_window(
         widget.setObjectName(object_name)
         widget.setAccessibleName(accessible_name or object_name)
         return widget
+
+    candidates = load_candidates()
+    candidate_by_id = {candidate.id: candidate for candidate in candidates}
 
     window = AISpeechWindow()
     name(window, "main_window", "AISpeechApp Main Window")
@@ -132,7 +199,7 @@ def create_main_window(
     candidate_box = QtWidgets.QComboBox()
     name(candidate_box, "candidate_box", "Candidate Selector")
     candidate_box.addItem("All candidates", None)
-    for candidate in load_candidates():
+    for candidate in candidates:
         candidate_box.addItem(f"P{candidate.priority} - {candidate.name}", candidate.id)
 
     run_button = QtWidgets.QPushButton("Run Metadata Smoke")
@@ -174,6 +241,23 @@ def create_main_window(
     voxcpm_tab = QtWidgets.QWidget()
     voxcpm_layout = QtWidgets.QVBoxLayout(voxcpm_tab)
     form = QtWidgets.QFormLayout()
+    synthesis_candidate = QtWidgets.QComboBox()
+    name(synthesis_candidate, "synthesis_candidate_box", "Synthesis Candidate Selector")
+    for candidate in candidates:
+        if candidate.id in {
+            "qwen3_tts_17b_customvoice",
+            "voxcpm2",
+            "dots_tts_soar",
+            "dots_tts_mf",
+            "indextts2",
+            "omnivoice",
+            "microsoft_vibevoice_15b",
+        }:
+            synthesis_candidate.addItem(f"P{candidate.priority} - {candidate.name}", candidate.id)
+    voxcpm_index = synthesis_candidate.findData("voxcpm2")
+    if voxcpm_index >= 0:
+        synthesis_candidate.setCurrentIndex(voxcpm_index)
+
     stream_text = QtWidgets.QPlainTextEdit()
     name(stream_text, "stream_text", "Streaming Text")
     stream_text.setPlainText(
@@ -221,10 +305,81 @@ def create_main_window(
     audio_latency.addItem("Low - faster start", "low")
     audio_latency.addItem("Default", None)
 
+    language_code = QtWidgets.QComboBox()
+    name(language_code, "language_code_box", "Language Selector")
+    language_code.addItem("English", ("en", "English"))
+    language_code.addItem("European Portuguese", ("pt-PT", "Portuguese"))
+
+    parameter_box = QtWidgets.QGroupBox("Model Controls")
+    name(parameter_box, "generation_parameter_box", "Model Controls")
+    parameter_layout = QtWidgets.QFormLayout(parameter_box)
+    parameter_widgets: dict[str, QtWidgets.QWidget] = {}
+
+    def clear_parameter_widgets() -> None:
+        while parameter_layout.rowCount():
+            parameter_layout.removeRow(0)
+        parameter_widgets.clear()
+
+    def add_parameter_widget(parameter: dict) -> None:
+        parameter_id = str(parameter["id"])
+        parameter_type = parameter.get("type", "float")
+        label = str(parameter.get("label", parameter_id))
+        if parameter_type == "bool":
+            widget = QtWidgets.QCheckBox()
+            widget.setChecked(bool(parameter.get("default", False)))
+        elif parameter_type == "int":
+            widget = QtWidgets.QSpinBox()
+            widget.setRange(int(parameter.get("min", 0)), int(parameter.get("max", 999999)))
+            widget.setSingleStep(int(parameter.get("step", 1)))
+            widget.setValue(int(parameter.get("default", 0)))
+        elif parameter_type == "choice":
+            widget = QtWidgets.QComboBox()
+            for choice in parameter.get("choices", []):
+                widget.addItem(str(choice), choice)
+            default_index = widget.findData(parameter.get("default"))
+            if default_index >= 0:
+                widget.setCurrentIndex(default_index)
+        else:
+            widget = QtWidgets.QDoubleSpinBox()
+            widget.setRange(float(parameter.get("min", 0.0)), float(parameter.get("max", 100.0)))
+            widget.setSingleStep(float(parameter.get("step", 0.1)))
+            widget.setDecimals(3)
+            widget.setValue(float(parameter.get("default", 0.0)))
+        name(widget, f"generation_parameter_{parameter_id}", label)
+        widget.setToolTip(str(parameter.get("description", label)))
+        parameter_widgets[parameter_id] = widget
+        parameter_layout.addRow(label, widget)
+
+    def selected_generation_options() -> dict[str, object]:
+        options: dict[str, object] = {}
+        for parameter_id, widget in parameter_widgets.items():
+            if isinstance(widget, QtWidgets.QCheckBox):
+                options[parameter_id] = widget.isChecked()
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                options[parameter_id] = widget.value()
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                options[parameter_id] = widget.value()
+            elif isinstance(widget, QtWidgets.QComboBox):
+                options[parameter_id] = widget.currentData()
+        return options
+
+    def refresh_generation_parameters() -> None:
+        clear_parameter_widgets()
+        candidate = candidate_by_id.get(str(synthesis_candidate.currentData()))
+        if candidate is None or not candidate.generation_parameters:
+            empty_label = QtWidgets.QLabel("No exposed controls for this backend yet.")
+            name(empty_label, "generation_parameter_empty", "No Model Controls")
+            parameter_layout.addRow(empty_label)
+            return
+        for parameter in candidate.generation_parameters:
+            add_parameter_widget(parameter)
+
+    form.addRow("Model", synthesis_candidate)
     form.addRow("Text", stream_text)
+    form.addRow("Language", language_code)
     form.addRow("Voice", voice_combo)
     form.addRow("Reference WAV", reference_row)
-    form.addRow("Output WAV", output_row)
+    form.addRow("Output File", output_row)
     form.addRow("", play_audio)
     form.addRow("Audio Device", audio_device)
     form.addRow("Playback Prebuffer", playback_prebuffer)
@@ -250,9 +405,10 @@ def create_main_window(
     stream_output.setReadOnly(True)
     stream_output.setPlainText("Run VoxCPM2 streaming to populate this panel.")
     voxcpm_layout.addLayout(form)
+    voxcpm_layout.addWidget(parameter_box)
     voxcpm_layout.addLayout(stream_controls)
     voxcpm_layout.addWidget(stream_output, 1)
-    tabs.addTab(voxcpm_tab, "VoxCPM2 Streaming")
+    tabs.addTab(voxcpm_tab, "Synthesis")
 
     def browse_reference() -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -268,9 +424,9 @@ def create_main_window(
     def browse_output() -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             window,
-            "Select output WAV",
+            "Select output file",
             str(DEFAULT_OUTPUT_DIR / "voxcpm2_streaming_gui.wav"),
-            "WAV files (*.wav)",
+            "Audio files (*.wav *.mp3)",
         )
         if path:
             output_path.setText(path)
@@ -283,25 +439,43 @@ def create_main_window(
 
     def run_stream_selected() -> None:
         stream_button.setEnabled(False)
-        window.statusBar().showMessage("Running VoxCPM2 streaming")
-        stream_output.setPlainText("Running VoxCPM2 streaming...")
+        candidate_id = str(synthesis_candidate.currentData())
+        candidate_name = candidate_by_id[candidate_id].name
+        window.statusBar().showMessage(f"Running {candidate_name}")
+        stream_output.setPlainText(f"Running {candidate_name}...")
         QtCore.QTimer.singleShot(10, finish_stream_run)
 
     def finish_stream_run() -> None:
         selected_device = audio_device.currentData()
-        stream_output.setPlainText(
-            run_voxcpm2_streaming_func(
-                text=stream_text.toPlainText(),
-                reference_wav_path=reference_path.text().strip(),
-                output_path=output_path.text().strip(),
-                play_audio=play_audio.isChecked(),
-                audio_device=selected_device,
-                playback_prebuffer_s=playback_prebuffer.value(),
-                audio_latency=audio_latency.currentData(),
+        candidate_id = str(synthesis_candidate.currentData())
+        options = selected_generation_options()
+        lang_code, lang_hint = language_code.currentData()
+        if candidate_id == "voxcpm2":
+            stream_output.setPlainText(
+                run_voxcpm2_streaming_func(
+                    text=stream_text.toPlainText(),
+                    reference_wav_path=reference_path.text().strip(),
+                    output_path=output_path.text().strip(),
+                    play_audio=play_audio.isChecked(),
+                    audio_device=selected_device,
+                    playback_prebuffer_s=playback_prebuffer.value(),
+                    audio_latency=audio_latency.currentData(),
+                    generation_options=options,
+                )
             )
-        )
+        else:
+            stream_output.setPlainText(
+                run_backend_synthesis_func(
+                    candidate_id=candidate_id,
+                    text=stream_text.toPlainText(),
+                    output_path=output_path.text().strip(),
+                    language_code=lang_code,
+                    language_hint=lang_hint,
+                    generation_options=options,
+                )
+            )
         stream_button.setEnabled(True)
-        window.statusBar().showMessage("VoxCPM2 streaming complete")
+        window.statusBar().showMessage(f"{candidate_by_id[candidate_id].name} complete")
 
     def refresh_stream_report() -> None:
         if DEFAULT_REPORT_PATH.exists():
@@ -338,6 +512,7 @@ def create_main_window(
     reference_browse.clicked.connect(browse_reference)
     voice_combo.currentIndexChanged.connect(select_voice_reference)
     output_browse.clicked.connect(browse_output)
+    synthesis_candidate.currentIndexChanged.connect(refresh_generation_parameters)
     stream_button.clicked.connect(run_stream_selected)
     load_stream_report.clicked.connect(refresh_stream_report)
     load_latency_history.clicked.connect(refresh_latency_history)
@@ -347,6 +522,10 @@ def create_main_window(
     window._smoke_output = output
     window._run_smoke_button = run_button
     window._stream_text = stream_text
+    window._synthesis_candidate_box = synthesis_candidate
+    window._language_code_box = language_code
+    window._generation_parameter_box = parameter_box
+    window._generation_parameter_widgets = parameter_widgets
     window._voice_reference_box = voice_combo
     window._reference_path = reference_path
     window._stream_output_path = output_path
@@ -357,6 +536,8 @@ def create_main_window(
     window._run_stream_button = stream_button
     window._stream_output = stream_output
     window._load_latency_history_button = load_latency_history
+
+    refresh_generation_parameters()
 
     return window
 
@@ -381,6 +562,7 @@ def _demo_streaming(
     audio_device: str | None,
     playback_prebuffer_s: float = 0.45,
     audio_latency: str | None = "high",
+    generation_options: dict[str, object] | None = None,
 ) -> str:
     output_file = Path(output_path)
     audio_sha256 = _write_demo_wav(output_file, text=text, reference_wav_path=reference_wav_path)
@@ -394,6 +576,7 @@ def _demo_streaming(
         "audio_device": audio_device,
         "playback_prebuffer_s": playback_prebuffer_s,
         "audio_latency": audio_latency,
+        "generation_options": generation_options or {},
         "first_chunk_latency_s": 0.18,
         "total_elapsed_s": 1.42,
         "audio_duration_s": 1.6,
