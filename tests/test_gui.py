@@ -18,6 +18,16 @@ def _find(window: QtWidgets.QWidget, object_name: str):
     return widget
 
 
+def _wait_until(predicate, timeout_ms: int = 1000):
+    elapsed = 0
+    while elapsed < timeout_ms:
+        if predicate():
+            return
+        QtTest.QTest.qWait(25)
+        elapsed += 25
+    assert predicate()
+
+
 def test_gui_smoke_button_runs_injected_backend(tmp_path):
     _app()
     calls: list[str | None] = []
@@ -50,7 +60,7 @@ class StreamCall:
     playback_prebuffer_s: float
     audio_latency: str | None
     generation_options: dict[str, object]
-    audio_observer: object
+    audio_observer: object | None
 
 
 def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_path):
@@ -88,31 +98,31 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_pat
     button = _find(window, "run_stream_button")
     output = _find(window, "stream_output")
     button.click()
-    QtTest.QTest.qWait(30)
+    assert not button.isEnabled()
+    _wait_until(lambda: bool(calls) and output.toPlainText() == "stream ok")
 
-    assert calls == [
-        StreamCall(
-            text="hello streaming",
-            reference_wav_path="C:/refs/voice_one.wav",
-            output_path="C:/out/generated.wav",
-            play_audio=True,
-            audio_device="7: Test Speakers",
-            playback_prebuffer_s=0.65,
-            audio_latency="low",
-            generation_options={
-                "cfg_value": 2.7,
-                "inference_timesteps": 14,
-                "normalize": True,
-                "denoise": False,
-                "retry_badcase": False,
-                "retry_badcase_max_times": 3,
-                "retry_badcase_ratio_threshold": 6.0,
-                "min_len": 2,
-                "max_len": 4096,
-            },
-            audio_observer=_find(window, "audio_visualizer").append_audio,
-        )
-    ]
+    assert calls[0] == StreamCall(
+        text="hello streaming",
+        reference_wav_path="C:/refs/voice_one.wav",
+        output_path="C:/out/generated.wav",
+        play_audio=True,
+        audio_device="7: Test Speakers",
+        playback_prebuffer_s=0.65,
+        audio_latency="low",
+        generation_options={
+            "cfg_value": 2.7,
+            "inference_timesteps": 14,
+            "normalize": True,
+            "denoise": False,
+            "retry_badcase": False,
+            "retry_badcase_max_times": 3,
+            "retry_badcase_ratio_threshold": 6.0,
+            "min_len": 2,
+            "max_len": 4096,
+        },
+        audio_observer=calls[0].audio_observer,
+    )
+    assert callable(calls[0].audio_observer)
     assert output.toPlainText() == "stream ok"
     assert button.isEnabled()
     assert window.statusBar().currentMessage() == "VoxCPM2 complete"
@@ -164,7 +174,7 @@ def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):
     button = _find(window, "run_stream_button")
     output = _find(window, "stream_output")
     button.click()
-    QtTest.QTest.qWait(30)
+    _wait_until(lambda: bool(calls) and output.toPlainText() == "backend ok")
 
     assert calls == [
         {

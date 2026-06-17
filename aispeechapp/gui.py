@@ -192,6 +192,48 @@ def create_main_window(
     class AISpeechWindow(QtWidgets.QMainWindow):
         pass
 
+    class SynthesisWorker(QtCore.QObject):
+        finished = QtCore.Signal(str, str)
+        audio_chunk = QtCore.Signal(object, int)
+
+        def __init__(
+            self,
+            *,
+            candidate_id: str,
+            run_voxcpm2: bool,
+            voxcpm2_kwargs: dict,
+            backend_kwargs: dict,
+        ) -> None:
+            super().__init__()
+            self._candidate_id = candidate_id
+            self._run_voxcpm2 = run_voxcpm2
+            self._voxcpm2_kwargs = voxcpm2_kwargs
+            self._backend_kwargs = backend_kwargs
+
+        @QtCore.Slot()
+        def run(self) -> None:
+            try:
+                if self._run_voxcpm2:
+                    kwargs = dict(self._voxcpm2_kwargs)
+
+                    def observe_audio(audio: np.ndarray, sample_rate: int) -> None:
+                        self.audio_chunk.emit(np.asarray(audio, dtype=np.float32).copy(), sample_rate)
+
+                    kwargs["audio_observer"] = observe_audio
+                    result = run_voxcpm2_streaming_func(**kwargs)
+                else:
+                    result = run_backend_synthesis_func(**self._backend_kwargs)
+            except Exception as exc:  # pragma: no cover - exercised through GUI smoke behavior
+                result = json.dumps(
+                    {
+                        "status": "failed",
+                        "candidate_id": self._candidate_id,
+                        "error": str(exc),
+                    },
+                    indent=2,
+                )
+            self.finished.emit(self._candidate_id, result)
+
     def name(widget: QtWidgets.QWidget, object_name: str, accessible_name: str | None = None):
         widget.setObjectName(object_name)
         widget.setAccessibleName(accessible_name or object_name)
@@ -601,40 +643,49 @@ def create_main_window(
         window.statusBar().showMessage(f"Running {candidate_name}")
         stream_output.setPlainText(f"Running {candidate_name}...")
         audio_visualizer.clear()
-        QtCore.QTimer.singleShot(10, finish_stream_run)
-
-    def finish_stream_run() -> None:
         selected_device = audio_device.currentData()
-        candidate_id = str(synthesis_candidate.currentData())
         options = selected_generation_options()
         lang_code, lang_hint = language_code.currentData()
-        if candidate_id == "voxcpm2":
-            stream_output.setPlainText(
-                run_voxcpm2_streaming_func(
-                    text=stream_text.toPlainText(),
-                    reference_wav_path=reference_path.text().strip(),
-                    output_path=output_path.text().strip(),
-                    play_audio=play_audio.isChecked(),
-                    audio_device=selected_device,
-                    playback_prebuffer_s=playback_prebuffer.value(),
-                    audio_latency=audio_latency.currentData(),
-                    generation_options=options,
-                    audio_observer=audio_visualizer.append_audio,
-                )
-            )
-        else:
-            stream_output.setPlainText(
-                run_backend_synthesis_func(
-                    candidate_id=candidate_id,
-                    text=stream_text.toPlainText(),
-                    output_path=output_path.text().strip(),
-                    language_code=lang_code,
-                    language_hint=lang_hint,
-                    generation_options=options,
-                )
-            )
-        stream_button.setEnabled(True)
-        window.statusBar().showMessage(f"{candidate_by_id[candidate_id].name} complete")
+
+        thread = QtCore.QThread(window)
+        worker = SynthesisWorker(
+            candidate_id=candidate_id,
+            run_voxcpm2=candidate_id == "voxcpm2",
+            voxcpm2_kwargs={
+                "text": stream_text.toPlainText(),
+                "reference_wav_path": reference_path.text().strip(),
+                "output_path": output_path.text().strip(),
+                "play_audio": play_audio.isChecked(),
+                "audio_device": selected_device,
+                "playback_prebuffer_s": playback_prebuffer.value(),
+                "audio_latency": audio_latency.currentData(),
+                "generation_options": options,
+            },
+            backend_kwargs={
+                "candidate_id": candidate_id,
+                "text": stream_text.toPlainText(),
+                "output_path": output_path.text().strip(),
+                "language_code": lang_code,
+                "language_hint": lang_hint,
+                "generation_options": options,
+            },
+        )
+        worker.moveToThread(thread)
+
+        def finish_stream_run(done_candidate_id: str, result: str) -> None:
+            stream_output.setPlainText(result)
+            stream_button.setEnabled(True)
+            window.statusBar().showMessage(f"{candidate_by_id[done_candidate_id].name} complete")
+            thread.quit()
+
+        worker.audio_chunk.connect(audio_visualizer.append_audio)
+        worker.finished.connect(finish_stream_run)
+        worker.finished.connect(worker.deleteLater)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        window._active_synthesis_thread = thread
+        window._active_synthesis_worker = worker
 
     def refresh_stream_report() -> None:
         if DEFAULT_REPORT_PATH.exists():

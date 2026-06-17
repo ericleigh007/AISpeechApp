@@ -107,6 +107,9 @@ During streaming playback, the GUI renders a realtime waveform and compact
 frequency spectrum from the same audio chunks that are written to disk and sent
 to the selected output device.
 
+Generation runs on a background Qt worker thread, so model loading and synthesis
+do not block the native GUI event loop while the run is in progress.
+
 Model-specific generation controls are declared in
 `configs\candidates.json` under each candidate's `generation_parameters` list.
 The GUI reads that metadata when a model is selected and shows only controls the
