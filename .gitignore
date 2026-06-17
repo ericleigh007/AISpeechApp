@@ -7,6 +7,7 @@ __pycache__/
 outputs/*
 reports/*
 voice_refs/*
+configs/*.local.json
 !outputs/.gitkeep
 !reports/.gitkeep
 !voice_refs/README.md

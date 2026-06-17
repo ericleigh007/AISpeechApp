@@ -152,3 +152,47 @@ def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):
     ]
     assert output.toPlainText() == "backend ok"
     assert window.statusBar().currentMessage() == "dots.tts soar complete"
+
+
+def test_gui_generation_controls_persist_per_model(tmp_path):
+    _app()
+    settings_path = tmp_path / "gui_settings.local.json"
+
+    first_window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        settings_path=settings_path,
+    )
+    first_candidate_box = _find(first_window, "synthesis_candidate_box")
+    first_candidate_box.setCurrentIndex(first_candidate_box.findData("voxcpm2"))
+    _find(first_window, "generation_parameter_cfg_value").setValue(2.6)
+    _find(first_window, "generation_parameter_inference_timesteps").setValue(16)
+    first_window.close()
+
+    second_window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        settings_path=settings_path,
+    )
+    second_candidate_box = _find(second_window, "synthesis_candidate_box")
+
+    assert second_candidate_box.currentData() == "voxcpm2"
+    assert _find(second_window, "generation_parameter_cfg_value").value() == 2.6
+    assert _find(second_window, "generation_parameter_inference_timesteps").value() == 16
+
+    second_candidate_box.setCurrentIndex(second_candidate_box.findData("dots_tts_soar"))
+    _find(second_window, "generation_parameter_num_steps").setValue(13)
+    second_window.close()
+
+    third_window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        settings_path=settings_path,
+    )
+    third_candidate_box = _find(third_window, "synthesis_candidate_box")
+    assert third_candidate_box.currentData() == "dots_tts_soar"
+    assert _find(third_window, "generation_parameter_num_steps").value() == 13
+
+    third_candidate_box.setCurrentIndex(third_candidate_box.findData("voxcpm2"))
+    assert _find(third_window, "generation_parameter_cfg_value").value() == 2.6
+    assert _find(third_window, "generation_parameter_inference_timesteps").value() == 16

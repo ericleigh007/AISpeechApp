@@ -21,6 +21,22 @@ from aispeechapp.voxcpm2_streaming import (
 
 
 OMNICHAT_VOICES_DIR = PROJECT_ROOT.parent / "OmniChat" / "voices"
+DEFAULT_GUI_SETTINGS_PATH = PROJECT_ROOT / "configs" / "gui_settings.local.json"
+
+
+def _load_gui_settings(settings_path: Path = DEFAULT_GUI_SETTINGS_PATH) -> dict:
+    if not settings_path.exists():
+        return {}
+    try:
+        payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_gui_settings(settings: dict, settings_path: Path = DEFAULT_GUI_SETTINGS_PATH) -> None:
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _run_smoke(candidate_id: str | None = None) -> str:
@@ -164,6 +180,7 @@ def create_main_window(
     load_voice_references_func=_load_voice_references,
     run_voxcpm2_streaming_func=_run_voxcpm2_streaming,
     run_backend_synthesis_func=_run_backend_synthesis,
+    settings_path: Path = DEFAULT_GUI_SETTINGS_PATH,
 ):
     from PySide6 import QtCore, QtWidgets
 
@@ -178,6 +195,7 @@ def create_main_window(
 
     candidates = load_candidates()
     candidate_by_id = {candidate.id: candidate for candidate in candidates}
+    gui_settings = _load_gui_settings(settings_path)
 
     window = AISpeechWindow()
     name(window, "main_window", "AISpeechApp Main Window")
@@ -257,6 +275,11 @@ def create_main_window(
     voxcpm_index = synthesis_candidate.findData("voxcpm2")
     if voxcpm_index >= 0:
         synthesis_candidate.setCurrentIndex(voxcpm_index)
+    saved_candidate_id = gui_settings.get("selected_synthesis_candidate_id")
+    if isinstance(saved_candidate_id, str):
+        saved_index = synthesis_candidate.findData(saved_candidate_id)
+        if saved_index >= 0:
+            synthesis_candidate.setCurrentIndex(saved_index)
 
     stream_text = QtWidgets.QPlainTextEdit()
     name(stream_text, "stream_text", "Streaming Text")
@@ -314,37 +337,63 @@ def create_main_window(
     name(parameter_box, "generation_parameter_box", "Model Controls")
     parameter_layout = QtWidgets.QFormLayout(parameter_box)
     parameter_widgets: dict[str, QtWidgets.QWidget] = {}
+    loading_parameters = False
 
     def clear_parameter_widgets() -> None:
         while parameter_layout.rowCount():
             parameter_layout.removeRow(0)
         parameter_widgets.clear()
 
-    def add_parameter_widget(parameter: dict) -> None:
+    def current_candidate_id() -> str:
+        return str(synthesis_candidate.currentData())
+
+    def stored_generation_options(candidate_id: str) -> dict:
+        by_candidate = gui_settings.get("generation_parameters", {})
+        if not isinstance(by_candidate, dict):
+            return {}
+        options = by_candidate.get(candidate_id, {})
+        return options if isinstance(options, dict) else {}
+
+    def write_generation_settings() -> None:
+        if loading_parameters:
+            return
+        candidate_id = current_candidate_id()
+        gui_settings["selected_synthesis_candidate_id"] = candidate_id
+        by_candidate = gui_settings.setdefault("generation_parameters", {})
+        if isinstance(by_candidate, dict):
+            by_candidate[candidate_id] = selected_generation_options()
+        _save_gui_settings(gui_settings, settings_path)
+
+    def add_parameter_widget(parameter: dict, stored_options: dict) -> None:
         parameter_id = str(parameter["id"])
         parameter_type = parameter.get("type", "float")
         label = str(parameter.get("label", parameter_id))
+        value = stored_options.get(parameter_id, parameter.get("default"))
         if parameter_type == "bool":
             widget = QtWidgets.QCheckBox()
-            widget.setChecked(bool(parameter.get("default", False)))
+            widget.setChecked(bool(value))
+            widget.stateChanged.connect(lambda _state: write_generation_settings())
         elif parameter_type == "int":
             widget = QtWidgets.QSpinBox()
             widget.setRange(int(parameter.get("min", 0)), int(parameter.get("max", 999999)))
             widget.setSingleStep(int(parameter.get("step", 1)))
-            widget.setValue(int(parameter.get("default", 0)))
+            widget.setValue(int(value))
+            widget.valueChanged.connect(lambda _value: write_generation_settings())
         elif parameter_type == "choice":
             widget = QtWidgets.QComboBox()
             for choice in parameter.get("choices", []):
                 widget.addItem(str(choice), choice)
-            default_index = widget.findData(parameter.get("default"))
+            default_index = widget.findData(value)
             if default_index >= 0:
                 widget.setCurrentIndex(default_index)
+            widget.currentIndexChanged.connect(lambda _index: write_generation_settings())
         else:
             widget = QtWidgets.QDoubleSpinBox()
             widget.setRange(float(parameter.get("min", 0.0)), float(parameter.get("max", 100.0)))
             widget.setSingleStep(float(parameter.get("step", 0.1)))
             widget.setDecimals(3)
-            widget.setValue(float(parameter.get("default", 0.0)))
+            widget.setValue(float(value))
+            widget.valueChanged.connect(lambda _value: write_generation_settings())
         name(widget, f"generation_parameter_{parameter_id}", label)
         widget.setToolTip(str(parameter.get("description", label)))
         parameter_widgets[parameter_id] = widget
@@ -364,15 +413,24 @@ def create_main_window(
         return options
 
     def refresh_generation_parameters() -> None:
+        nonlocal loading_parameters
+        loading_parameters = True
         clear_parameter_widgets()
-        candidate = candidate_by_id.get(str(synthesis_candidate.currentData()))
+        candidate_id = current_candidate_id()
+        gui_settings["selected_synthesis_candidate_id"] = candidate_id
+        candidate = candidate_by_id.get(candidate_id)
         if candidate is None or not candidate.generation_parameters:
             empty_label = QtWidgets.QLabel("No exposed controls for this backend yet.")
             name(empty_label, "generation_parameter_empty", "No Model Controls")
             parameter_layout.addRow(empty_label)
+            loading_parameters = False
+            _save_gui_settings(gui_settings, settings_path)
             return
+        stored_options = stored_generation_options(candidate_id)
         for parameter in candidate.generation_parameters:
-            add_parameter_widget(parameter)
+            add_parameter_widget(parameter, stored_options)
+        loading_parameters = False
+        write_generation_settings()
 
     form.addRow("Model", synthesis_candidate)
     form.addRow("Text", stream_text)

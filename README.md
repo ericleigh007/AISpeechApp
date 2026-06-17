@@ -97,6 +97,12 @@ text normalization, denoise, retry, and min/max generation length controls;
 Qwen3-TTS exposes speaker/max-token controls; dots.tts exposes steps and
 guidance.
 
+Your current per-model knob values are saved in
+`configs\gui_settings.local.json`. That file is intentionally git-ignored:
+`configs\candidates.json` remains the shared default/schema file, while the
+local settings file preserves your last selected model and each model's current
+control values across GUI restarts.
+
 ## Batch Backend Outputs
 
 The backend synthesis helper supports non-streaming file generation for the
