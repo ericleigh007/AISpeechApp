@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import sys
+import threading
 import time
 import wave
 from pathlib import Path
@@ -204,12 +205,14 @@ def create_main_window(
             run_voxcpm2: bool,
             voxcpm2_kwargs: dict,
             backend_kwargs: dict,
+            visualization_enabled: threading.Event,
         ) -> None:
             super().__init__()
             self._candidate_id = candidate_id
             self._run_voxcpm2 = run_voxcpm2
             self._voxcpm2_kwargs = voxcpm2_kwargs
             self._backend_kwargs = backend_kwargs
+            self._visualization_enabled = visualization_enabled
 
         @QtCore.Slot()
         def run(self) -> None:
@@ -220,6 +223,8 @@ def create_main_window(
 
                     def observe_audio(audio: np.ndarray, sample_rate: int) -> None:
                         nonlocal last_emit_s
+                        if not self._visualization_enabled.is_set():
+                            return
                         now = time.monotonic()
                         if now - last_emit_s < 0.075:
                             return
@@ -455,6 +460,10 @@ def create_main_window(
     play_audio = QtWidgets.QCheckBox("Stream to audio device")
     name(play_audio, "play_audio_checkbox", "Stream to audio device")
     play_audio.setChecked(True)
+    visualize_audio = QtWidgets.QRadioButton("Visualize playback")
+    name(visualize_audio, "visualize_playback_radio", "Visualize Playback")
+    visualize_audio.setAutoExclusive(False)
+    visualize_audio.setChecked(True)
     audio_device = QtWidgets.QComboBox()
     name(audio_device, "audio_device_box", "Audio Device Selector")
     audio_device.addItem("Default output device", None)
@@ -583,6 +592,7 @@ def create_main_window(
     form.addRow("Reference WAV", reference_row)
     form.addRow("Output File", output_row)
     form.addRow("", play_audio)
+    form.addRow("", visualize_audio)
     form.addRow("Audio Device", audio_device)
     form.addRow("Playback Prebuffer", playback_prebuffer)
     form.addRow("Audio Latency", audio_latency)
@@ -668,6 +678,12 @@ def create_main_window(
         selected_device = audio_device.currentData()
         options = selected_generation_options()
         lang_code, lang_hint = language_code.currentData()
+        visualization_enabled = threading.Event()
+        if visualize_audio.isChecked():
+            visualization_enabled.set()
+        else:
+            visualization_enabled.clear()
+        window._active_visualization_enabled = visualization_enabled
 
         thread = QtCore.QThread(window)
         worker = SynthesisWorker(
@@ -691,6 +707,7 @@ def create_main_window(
                 "language_hint": lang_hint,
                 "generation_options": options,
             },
+            visualization_enabled=visualization_enabled,
         )
         worker.moveToThread(thread)
         bridge = SynthesisUiBridge(thread)
@@ -705,6 +722,15 @@ def create_main_window(
         window._active_synthesis_thread = thread
         window._active_synthesis_worker = worker
         window._active_synthesis_bridge = bridge
+
+    def set_visualization_enabled(enabled: bool) -> None:
+        active_event = getattr(window, "_active_visualization_enabled", None)
+        if active_event is not None:
+            if enabled:
+                active_event.set()
+            else:
+                active_event.clear()
+
 
     def refresh_stream_report() -> None:
         if DEFAULT_REPORT_PATH.exists():
@@ -742,6 +768,7 @@ def create_main_window(
     voice_combo.currentIndexChanged.connect(select_voice_reference)
     output_browse.clicked.connect(browse_output)
     synthesis_candidate.currentIndexChanged.connect(refresh_generation_parameters)
+    visualize_audio.toggled.connect(set_visualization_enabled)
     stream_button.clicked.connect(run_stream_selected)
     load_stream_report.clicked.connect(refresh_stream_report)
     load_latency_history.clicked.connect(refresh_latency_history)
@@ -759,6 +786,7 @@ def create_main_window(
     window._reference_path = reference_path
     window._stream_output_path = output_path
     window._audio_visualizer = audio_visualizer
+    window._visualize_playback_radio = visualize_audio
     window._play_audio_checkbox = play_audio
     window._audio_device_box = audio_device
     window._playback_prebuffer_box = playback_prebuffer

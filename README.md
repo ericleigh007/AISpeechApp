@@ -106,6 +106,8 @@ minimum start latency.
 During streaming playback, the GUI renders a realtime waveform and compact
 frequency spectrum from the same audio chunks that are written to disk and sent
 to the selected output device.
+The `Visualize playback` radio control can be toggled during playback to
+disable or re-enable visualizer updates without changing audio generation.
 
 Generation runs on a background Qt worker thread, so model loading and synthesis
 do not block the native GUI event loop while the run is in progress.

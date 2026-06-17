@@ -147,6 +147,35 @@ def test_gui_audio_visualizer_updates_from_audio(tmp_path):
     assert not pixmap.isNull()
 
 
+def test_gui_visualizer_toggle_disables_stream_visualization(tmp_path):
+    _app()
+    calls: list[StreamCall] = []
+
+    def fake_stream(**kwargs):
+        kwargs["audio_observer"](np.ones(512, dtype=np.float32) * 0.25, 16000)
+        calls.append(StreamCall(**kwargs))
+        return "stream ok"
+
+    window = create_main_window(
+        load_audio_devices_func=lambda: [],
+        load_voice_references_func=lambda: [],
+        run_voxcpm2_streaming_func=fake_stream,
+        settings_path=tmp_path / "settings.local.json",
+    )
+
+    tabs = _find(window, "main_tabs")
+    tabs.setCurrentIndex(1)
+    _find(window, "visualize_playback_radio").setChecked(False)
+    button = _find(window, "run_stream_button")
+    output = _find(window, "stream_output")
+    button.click()
+    _wait_until(lambda: bool(calls) and output.toPlainText() == "stream ok")
+
+    assert callable(calls[0].audio_observer)
+    assert _find(window, "audio_visualizer").sample_count == 0
+    assert _find(window, "audio_visualizer").spectrum_peak == 0.0
+
+
 def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):
     _app()
     calls: list[dict] = []
