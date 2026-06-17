@@ -62,6 +62,20 @@ The desktop GUI uses the same framework style as OmniChat RT: native PySide6,
 a `QMainWindow` shell, injectable backends for tests, and an app-borne demo
 probe that drives the real window and saves screenshots plus a JSON report.
 
+## GUI Screenshots
+
+Metadata smoke tab:
+
+![AISpeechApp metadata smoke tab](docs/images/gui-metadata-smoke.png)
+
+Synthesis tab with VoxCPM2 voice cloning controls:
+
+![AISpeechApp synthesis tab with VoxCPM2 controls](docs/images/gui-synthesis-controls.png)
+
+Latency history view:
+
+![AISpeechApp latency history view](docs/images/gui-latency-history.png)
+
 ```powershell
 .\launch.bat
 ```
@@ -134,7 +148,8 @@ reference-WAV cloning remains unverified until that API exposes a stable hook.
 
 - Use the local `.venv` only.
 - Keep model weights/caches on the large model disk, not the system drive.
-- Do not commit generated audio, screenshots, reports, local voice samples, or model weights.
+- Do not commit generated audio, probe-output screenshots, reports, local voice samples, or model weights.
+- Curated documentation screenshots belong under `docs\images`.
 - Keep the GUI native PySide6, matching OmniChat RT's desktop architecture.
 - Preserve app-borne demo tests for visible GUI workflows.
 

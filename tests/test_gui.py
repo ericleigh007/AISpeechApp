@@ -17,13 +17,14 @@ def _find(window: QtWidgets.QWidget, object_name: str):
     return widget
 
 
-def test_gui_smoke_button_runs_injected_backend():
+def test_gui_smoke_button_runs_injected_backend(tmp_path):
     _app()
     calls: list[str | None] = []
     window = create_main_window(
         run_smoke_func=lambda candidate_id: calls.append(candidate_id) or "smoke ok",
         load_audio_devices_func=lambda: [],
         load_voice_references_func=lambda: [],
+        settings_path=tmp_path / "settings.local.json",
     )
 
     assert isinstance(window, QtWidgets.QMainWindow)
@@ -50,7 +51,7 @@ class StreamCall:
     generation_options: dict[str, object]
 
 
-def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output():
+def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output(tmp_path):
     _app()
     calls: list[StreamCall] = []
 
@@ -62,6 +63,7 @@ def test_gui_voxcpm2_streaming_button_passes_reference_device_and_output():
         load_audio_devices_func=lambda: ["7: Test Speakers"],
         load_voice_references_func=lambda: [("Voice One", "C:/refs/voice_one.wav")],
         run_voxcpm2_streaming_func=fake_stream,
+        settings_path=tmp_path / "settings.local.json",
     )
 
     tabs = _find(window, "main_tabs")
@@ -124,6 +126,7 @@ def test_gui_backend_candidate_uses_dynamic_controls(tmp_path):
         load_audio_devices_func=lambda: [],
         load_voice_references_func=lambda: [],
         run_backend_synthesis_func=fake_backend,
+        settings_path=tmp_path / "settings.local.json",
     )
 
     tabs = _find(window, "main_tabs")

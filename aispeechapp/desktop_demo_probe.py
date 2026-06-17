@@ -34,6 +34,7 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
         run_smoke_func=_demo_smoke,
         load_audio_devices_func=lambda: ["Demo output device"],
         run_voxcpm2_streaming_func=_demo_streaming,
+        settings_path=output_dir / "desktop_demo_probe_settings.local.json",
     )
     window.setWindowTitle("AISpeechApp - Desktop Demo Probe")
     window.show()
@@ -63,6 +64,10 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
         "Probe prompt one: crisp consonants, changing rhythm, and a natural pause.",
         "Probe prompt two: numbers 17 and 42, Portuguese names, and careful pacing.",
     ]
+    voxcpm_index = window._synthesis_candidate_box.findData("voxcpm2")
+    if voxcpm_index >= 0:
+        window._synthesis_candidate_box.setCurrentIndex(voxcpm_index)
+        process_events(app, 0.05)
     voices = ["Pegasus", "Eric Snyder"]
     generated: list[dict] = []
     for voice_name in voices:
