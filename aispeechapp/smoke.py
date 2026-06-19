@@ -109,7 +109,12 @@ def run_metadata_smoke(candidate: Candidate) -> SmokeResult:
         cache_present=cache_present,
         status=status,
         elapsed_s=round(time.perf_counter() - start, 3),
-        details={"metadata": metadata, "capabilities": candidate.capabilities, "notes": candidate.notes},
+        details={
+            "metadata": metadata,
+            "capabilities": candidate.capabilities,
+            "model_scale": candidate.model_scale,
+            "notes": candidate.notes,
+        },
     )
 
 

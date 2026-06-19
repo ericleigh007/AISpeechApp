@@ -44,5 +44,7 @@ def test_desktop_demo_probe_exercises_real_pyside_window(tmp_path: Path):
     for item in voice_matrix["generated"]:
         assert Path(item["output_path"]).exists()
         assert item["output_sha256"]
+        assert Path(item["metadata_path"]).exists()
+        assert item["time_to_first_output_s"] is not None
     for path in payload["screenshots"].values():
         assert Path(path).exists()

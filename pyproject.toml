@@ -27,12 +27,18 @@ gui = [
 metrics = [
     "librosa>=0.10",
 ]
+quant = [
+    "bitsandbytes>=0.49",
+    "torchao>=0.17",
+]
 
 [project.scripts]
 aispeech-smoke = "aispeechapp.smoke:main"
 aispeech-first-impression = "aispeechapp.first_impression:main"
 aispeech-gui = "aispeechapp.gui:main"
 aispeech-desktop-demo-probe = "aispeechapp.desktop_demo_probe:main"
+aispeech-bnb-gui-probe = "aispeechapp.bnb_gui_probe:main"
+aispeech-audio-gap-analysis = "aispeechapp.audio_gap_analysis:main"
 aispeech-voxcpm2-stream = "aispeechapp.voxcpm2_streaming:main"
 
 [tool.setuptools.packages.find]

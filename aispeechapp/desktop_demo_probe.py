@@ -45,16 +45,18 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
     }
     results: list[dict] = []
 
-    window._tabs.setCurrentIndex(0)
+    window._tabs.setCurrentIndex(window._diagnostics_tab_index)
     window._run_smoke_button.click()
     process_events(app, 0.2)
-    smoke_text = window._smoke_output.toPlainText()
+    smoke_details = window._smoke_details_output.toPlainText()
     results.append(
         {
             "act": 1,
             "title": "Metadata smoke",
-            "passed": "metadata smoke path exercised" in smoke_text,
-            "output_chars": len(smoke_text),
+            "passed": window._smoke_output.rowCount() > 0
+            or "metadata smoke path exercised" in smoke_details,
+            "output_rows": window._smoke_output.rowCount(),
+            "details_chars": len(smoke_details),
             "status": window.statusBar().currentMessage(),
         }
     )
@@ -77,7 +79,7 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
         window._voice_reference_box.setCurrentIndex(voice_index)
         process_events(app, 0.05)
         for prompt_index, prompt in enumerate(prompts, start=1):
-            window._tabs.setCurrentIndex(1)
+            window._tabs.setCurrentIndex(window._synthesis_tab_index)
             window._stream_text.setPlainText(prompt)
             safe_voice = voice_name.lower().replace(" ", "_")
             output_wav = DEFAULT_OUTPUT_DIR / f"desktop_probe_{safe_voice}_{prompt_index}.wav"
@@ -94,7 +96,10 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
                     "output_path": payload.get("output_path"),
                     "output_exists": Path(payload.get("output_path", "")).exists(),
                     "output_sha256": payload.get("output_sha256"),
+                    "metadata_path": payload.get("metadata_path"),
+                    "metadata_exists": Path(payload.get("metadata_path", "")).exists(),
                     "first_chunk_latency_s": payload.get("first_chunk_latency_s"),
+                    "time_to_first_output_s": payload.get("time_to_first_output_s"),
                     "realtime_factor": payload.get("realtime_factor"),
                     "chunk_count": payload.get("chunk_count"),
                 }
@@ -116,6 +121,8 @@ def run_probe(output_dir: Path, output_path: Path) -> dict:
             "title": "VoxCPM2 streaming voice/prompt matrix",
             "passed": len(generated) == len(prompts) * len(voices)
             and all(item["output_exists"] for item in generated)
+            and all(item["metadata_exists"] for item in generated)
+            and all(item["time_to_first_output_s"] is not None for item in generated)
             and all(per_prompt_voice_hashes_differ),
             "prompts": prompts,
             "voices": voices,

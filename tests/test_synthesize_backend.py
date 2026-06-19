@@ -27,7 +27,12 @@ def _load_backend_module():
 def test_synthesize_backend_routes_omnivoice(monkeypatch, tmp_path: Path):
     module = _load_backend_module()
     calls = []
-    monkeypatch.setattr(module, "_write_omnivoice", lambda text, output: calls.append((text, output)))
+    reference = tmp_path / "voice.wav"
+    monkeypatch.setattr(
+        module,
+        "_write_omnivoice",
+        lambda text, output, reference_wav_path: calls.append((text, output, reference_wav_path)),
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -43,11 +48,13 @@ def test_synthesize_backend_routes_omnivoice(monkeypatch, tmp_path: Path):
             "English",
             "--output",
             str(tmp_path / "out.wav"),
+            "--reference-wav-path",
+            str(reference),
         ],
     )
 
     assert module.main() == 0
-    assert calls == [("hello", tmp_path / "out.wav")]
+    assert calls == [("hello", tmp_path / "out.wav", reference)]
 
 
 def test_synthesize_backend_routes_vibevoice(monkeypatch, tmp_path: Path):
@@ -56,7 +63,9 @@ def test_synthesize_backend_routes_vibevoice(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         module,
         "_write_vibevoice_15b",
-        lambda text, output: calls.append((text, output)),
+        lambda text, output, options, reference_wav_path: calls.append(
+            (text, output, options, reference_wav_path)
+        ),
     )
     monkeypatch.setattr(
         sys,
@@ -77,7 +86,7 @@ def test_synthesize_backend_routes_vibevoice(monkeypatch, tmp_path: Path):
     )
 
     assert module.main() == 0
-    assert calls == [("hello", tmp_path / "out.wav")]
+    assert calls == [("hello", tmp_path / "out.wav", {}, None)]
 
 
 def test_synthesize_backend_routes_voxcpm2_options(monkeypatch, tmp_path: Path):
@@ -106,6 +115,52 @@ def test_synthesize_backend_routes_voxcpm2_options(monkeypatch, tmp_path: Path):
 
     assert module.main() == 0
     assert calls == [("hello", tmp_path / "out.wav", {"cfg_value": 2.4, "inference_timesteps": 12})]
+
+
+def test_qwen_backend_uses_style_instruction_option(monkeypatch, tmp_path: Path):
+    module = _load_backend_module()
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, model_id, device_map, dtype, attn_implementation):
+            assert model_id == "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+            return cls()
+
+        def generate_custom_voice(
+            self,
+            *,
+            text,
+            language,
+            speaker,
+            instruct,
+            max_new_tokens,
+        ):
+            assert text == "hello from qwen"
+            assert language == "English"
+            assert speaker == "Ryan"
+            assert instruct == "warm calm delivery"
+            assert max_new_tokens == 256
+            return [np.zeros(2400, dtype=np.float32)], 24000
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+        bfloat16="bfloat16",
+        float32="float32",
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "qwen_tts", SimpleNamespace(Qwen3TTSModel=FakeModel))
+
+    output = tmp_path / "qwen.wav"
+    module._write_qwen3(
+        "qwen3_tts_17b_customvoice",
+        "hello from qwen",
+        "en",
+        "English",
+        output,
+        {"style_instruction": "warm calm delivery", "max_new_tokens": 256},
+    )
+
+    assert output.exists()
 
 
 def test_write_audio_file_wav(tmp_path: Path):
@@ -183,43 +238,124 @@ def test_omnivoice_backend_writes_mp3_with_reference_voice(monkeypatch, tmp_path
     monkeypatch.chdir(tmp_path)
 
     output = tmp_path / "omnivoice.mp3"
-    module._write_omnivoice("hello from omnivoice", output)
+    module._write_omnivoice("hello from omnivoice", output, None)
 
     assert output.exists()
     assert output.stat().st_size > 0
 
 
-def test_vibevoice_backend_writes_mp3_from_pipeline(monkeypatch, tmp_path: Path):
+def test_omnivoice_backend_uses_selected_reference_voice(monkeypatch, tmp_path: Path):
     module = _load_backend_module()
-    if shutil.which("ffmpeg") is None:
-        raise AssertionError("ffmpeg is required for MP3 output tests on this workstation.")
 
-    def fake_pipeline(task, model, device, torch_dtype):
-        assert task == "text-to-speech"
-        assert model == "microsoft/VibeVoice-1.5B"
-        assert device == -1
-        assert torch_dtype == "float32"
+    reference = tmp_path / "custom_voice.wav"
+    reference.write_bytes(b"fake wav placeholder")
+    reference.with_suffix(".txt").write_text("custom transcript", encoding="utf-8")
 
-        def run(text):
-            assert text == "hello from vibevoice"
-            return {
-                "audio": np.sin(np.linspace(0, np.pi * 2, 2400, dtype=np.float32)),
-                "sampling_rate": 24000,
-            }
+    class FakeOmniVoice:
+        @classmethod
+        def from_pretrained(cls, model_id, device_map, dtype):
+            return cls()
 
-        return run
+        def generate(self, text, ref_audio, ref_text):
+            assert ref_audio == str(reference)
+            assert ref_text == "custom transcript"
+            return [np.zeros(2400, dtype=np.float32)]
 
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(is_available=lambda: False),
-        bfloat16="bfloat16",
+        float16="float16",
         float32="float32",
     )
-    fake_transformers = SimpleNamespace(pipeline=fake_pipeline)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    monkeypatch.setitem(sys.modules, "omnivoice", SimpleNamespace(OmniVoice=FakeOmniVoice))
 
-    output = tmp_path / "vibevoice.mp3"
-    module._write_vibevoice_15b("hello from vibevoice", output)
+    output = tmp_path / "omnivoice.wav"
+    module._write_omnivoice("hello from omnivoice", output, reference)
+
+    assert output.exists()
+
+
+def test_vibevoice_backend_writes_wav_from_native_inference(monkeypatch, tmp_path: Path):
+    module = _load_backend_module()
+
+    voice_refs = tmp_path / "voice_refs"
+    voice_refs.mkdir()
+    sf.write(voice_refs / "first_impression.wav", np.zeros(2400, dtype=np.float32), 24000)
+
+    class FakeTensor:
+        def __init__(self):
+            self.device = None
+
+        def to(self, device):
+            self.device = device
+            return self
+
+    class FakeProcessor:
+        tokenizer = object()
+
+        @classmethod
+        def from_pretrained(cls, model_id):
+            assert model_id == "microsoft/VibeVoice-1.5B"
+            return cls()
+
+        def __call__(self, text, voice_samples, padding, return_tensors, return_attention_mask):
+            assert text == ["Speaker 1: hello from vibevoice"]
+            assert voice_samples[0][0].endswith("first_impression.wav")
+            assert padding is True
+            assert return_tensors == "pt"
+            assert return_attention_mask is True
+            return {"input_ids": FakeTensor()}
+
+        def save_audio(self, audio, output_path):
+            sf.write(output_path, np.asarray(audio, dtype=np.float32), 24000)
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, model_id, torch_dtype, device_map, attn_implementation):
+            assert model_id == "microsoft/VibeVoice-1.5B"
+            assert torch_dtype == "float32"
+            assert device_map == "cpu"
+            assert attn_implementation == "sdpa"
+            return cls()
+
+        def eval(self):
+            return None
+
+        def set_ddpm_inference_steps(self, num_steps):
+            assert num_steps == 4
+
+        def generate(self, **kwargs):
+            assert kwargs["cfg_scale"] == 1.6
+            assert kwargs["generation_config"] == {"do_sample": False}
+            assert kwargs["is_prefill"] is True
+            return SimpleNamespace(
+                speech_outputs=[np.sin(np.linspace(0, np.pi * 2, 2400, dtype=np.float32))]
+            )
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+        manual_seed=lambda seed: None,
+        bfloat16="bfloat16",
+        float32="float32",
+        is_tensor=lambda value: isinstance(value, FakeTensor),
+    )
+    fake_modeling = SimpleNamespace(VibeVoiceForConditionalGenerationInference=FakeModel)
+    fake_processor = SimpleNamespace(VibeVoiceProcessor=FakeProcessor)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "vibevoice", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "vibevoice.modular", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "vibevoice.processor", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "vibevoice.modular.modeling_vibevoice_inference", fake_modeling)
+    monkeypatch.setitem(sys.modules, "vibevoice.processor.vibevoice_processor", fake_processor)
+    monkeypatch.chdir(tmp_path)
+
+    output = tmp_path / "vibevoice.wav"
+    module._write_vibevoice_15b(
+        "hello from vibevoice",
+        output,
+        {"cfg_scale": 1.6, "ddpm_steps": 4},
+        voice_refs / "first_impression.wav",
+    )
 
     assert output.exists()
     assert output.stat().st_size > 0

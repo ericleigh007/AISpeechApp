@@ -65,6 +65,13 @@ class StreamingSynthesisResult:
     retry_badcase: bool
     retry_badcase_max_times: int
     retry_badcase_ratio_threshold: float
+    seed: int | None
+    quantization_method: str
+    quantization_targets: str
+    quantization_status: str
+    torch_compile: bool
+    torch_compile_mode: str
+    torch_compile_status: str
     audio_normalization: bool
     audio_target_peak: float
     chunk_count: int
@@ -73,6 +80,7 @@ class StreamingSynthesisResult:
     audio_duration_s: float
     realtime_factor: float | None
     played_to_device: bool
+    playback_mode: str
     audio_device: str | int | None
     playback_prebuffer_s: float
     audio_latency: str | float | None
@@ -83,6 +91,10 @@ class StreamingSynthesisResult:
 
 @lru_cache(maxsize=1)
 def _default_model_factory() -> VoxCPM2StreamingModel:
+    return _load_default_voxcpm2_model()
+
+
+def _load_default_voxcpm2_model() -> VoxCPM2StreamingModel:
     configure_model_caches()
     from voxcpm import VoxCPM
 
@@ -90,7 +102,28 @@ def _default_model_factory() -> VoxCPM2StreamingModel:
         "openbmb/VoxCPM2",
         load_denoiser=False,
         cache_dir=os.environ.get("HUGGINGFACE_HUB_CACHE"),
+        optimize=False,
     )
+
+
+@lru_cache(maxsize=1)
+def _prepared_default_model_factory(
+    cache_key: str,
+    quantization_method: str,
+    quantization_targets: str,
+) -> tuple[VoxCPM2StreamingModel, str]:
+    model = _load_default_voxcpm2_model()
+    model, quantization_status = _maybe_quantize_model(
+        model,
+        method=quantization_method,
+        targets=quantization_targets,
+    )
+    return model, quantization_status
+
+
+def clear_default_model_caches() -> None:
+    _default_model_factory.cache_clear()
+    _prepared_default_model_factory.cache_clear()
 
 
 def _to_mono_float32(chunk: np.ndarray) -> np.ndarray:
@@ -98,6 +131,261 @@ def _to_mono_float32(chunk: np.ndarray) -> np.ndarray:
     if array.ndim == 2:
         array = array.mean(axis=1)
     return array.astype(np.float32, copy=False)
+
+
+def _maybe_compile_model(
+    model: VoxCPM2StreamingModel,
+    *,
+    enabled: bool,
+    mode: str,
+) -> tuple[VoxCPM2StreamingModel, str]:
+    if not enabled:
+        return model, "disabled"
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - depends on optional torch runtime
+        return model, f"unavailable: {type(exc).__name__}: {exc}"
+    if not hasattr(torch, "compile"):
+        return model, "unavailable: torch.compile is not present"
+    try:
+        from torch import nn
+    except Exception as exc:  # pragma: no cover - depends on optional torch runtime
+        return model, f"unavailable: torch.nn import failed: {type(exc).__name__}: {exc}"
+    if isinstance(model, nn.Module):
+        try:
+            return torch.compile(model, mode=mode), f"compiled:model:{mode}"
+        except Exception as exc:  # pragma: no cover - depends on backend/model support
+            return model, f"failed:model:{type(exc).__name__}: {exc}"
+
+    compiled_names: list[str] = []
+    try:
+        model_vars = vars(model)
+    except TypeError:
+        model_vars = {}
+    for name, value in model_vars.items():
+        if name == "tts_model":
+            # VoxCPM checks isinstance(self.tts_model, VoxCPM2Model) before
+            # allowing reference_wav_path. Wrapping this attribute directly in
+            # torch.compile breaks voice cloning even when the real model is v2.
+            continue
+        if isinstance(value, nn.Module):
+            try:
+                setattr(model, name, torch.compile(value, mode=mode))
+                compiled_names.append(name)
+            except Exception:
+                continue
+    if compiled_names:
+        return model, f"compiled:modules:{','.join(sorted(compiled_names))}:{mode}"
+    return model, "not_applicable: no torch.nn.Module target found"
+
+
+def _set_torch_seed(seed: int | None) -> str:
+    if seed is None:
+        return "disabled"
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - depends on optional torch runtime
+        return f"unavailable: {type(exc).__name__}: {exc}"
+    torch.manual_seed(seed)
+    cuda = getattr(torch, "cuda", None)
+    if cuda is not None and cuda.is_available():
+        cuda.manual_seed_all(seed)
+        return "set:torch+cuda"
+    return "set:torch"
+
+
+def _get_nested_attr(root: object, path: str) -> object:
+    value = root
+    for part in path.split("."):
+        value = getattr(value, part)
+    return value
+
+
+def _set_nested_attr(root: object, path: str, value: object) -> None:
+    parent_path, _, attr_name = path.rpartition(".")
+    parent = _get_nested_attr(root, parent_path) if parent_path else root
+    setattr(parent, attr_name, value)
+
+
+def _quantization_target_paths(targets: str) -> tuple[str, ...]:
+    if targets == "base_lm_only":
+        return ("tts_model.base_lm",)
+    if targets == "lm_and_diffusion":
+        return ("tts_model.base_lm", "tts_model.residual_lm", "tts_model.feat_decoder.estimator")
+    return ("tts_model.base_lm", "tts_model.residual_lm")
+
+
+def _maybe_quantize_model(
+    model: VoxCPM2StreamingModel,
+    *,
+    method: str,
+    targets: str,
+) -> tuple[VoxCPM2StreamingModel, str]:
+    if method == "disabled":
+        return model, "disabled"
+    if method == "bnb_int8_linear":
+        return _maybe_quantize_model_bnb(model, method=method, targets=targets)
+    if method in {"torchao_int8_weight_only", "torchao_int4_weight_only"}:
+        return _maybe_quantize_model_torchao(model, method=method, targets=targets)
+    if method != "dynamic_int8_cpu":
+        return model, f"unsupported:{method}"
+    try:
+        import torch
+        from torch import nn
+        from torch.ao.quantization import quantize_dynamic
+    except Exception as exc:  # pragma: no cover - depends on optional torch runtime
+        return model, f"unavailable: {type(exc).__name__}: {exc}"
+
+    tts_model = getattr(model, "tts_model", None)
+    device = str(getattr(tts_model, "device", "")).lower()
+    if device and not device.startswith("cpu"):
+        return model, f"skipped:dynamic_int8_cpu requires CPU model, found {device}"
+
+    quantized_paths: list[str] = []
+    skipped_paths: list[str] = []
+    for path in _quantization_target_paths(targets):
+        try:
+            module = _get_nested_attr(model, path)
+        except AttributeError:
+            skipped_paths.append(path)
+            continue
+        if not isinstance(module, nn.Module):
+            skipped_paths.append(path)
+            continue
+        try:
+            quantized_module = quantize_dynamic(
+                module.cpu(),
+                {nn.Linear},
+                dtype=torch.qint8,
+            )
+            _set_nested_attr(model, path, quantized_module)
+            quantized_paths.append(path)
+        except Exception:
+            skipped_paths.append(path)
+    if quantized_paths:
+        status = f"dynamic_int8_cpu:{','.join(quantized_paths)}"
+        if skipped_paths:
+            status += f";skipped:{','.join(skipped_paths)}"
+        return model, status
+    return model, f"not_applicable: no quantizable targets for {targets}"
+
+
+def _maybe_quantize_model_torchao(
+    model: VoxCPM2StreamingModel,
+    *,
+    method: str,
+    targets: str,
+) -> tuple[VoxCPM2StreamingModel, str]:
+    try:
+        from torch import nn
+        from torchao.quantization import Int4WeightOnlyConfig, Int8WeightOnlyConfig, quantize_
+    except Exception as exc:  # pragma: no cover - depends on optional torchao runtime
+        return model, f"unavailable: torchao: {type(exc).__name__}: {exc}"
+
+    if method == "torchao_int4_weight_only":
+        config = Int4WeightOnlyConfig(group_size=128)
+    else:
+        config = Int8WeightOnlyConfig(version=2)
+
+    quantized_paths: list[str] = []
+    skipped_paths: list[str] = []
+    for path in _quantization_target_paths(targets):
+        try:
+            module = _get_nested_attr(model, path)
+        except AttributeError:
+            skipped_paths.append(path)
+            continue
+        if not isinstance(module, nn.Module):
+            skipped_paths.append(path)
+            continue
+        try:
+            quantize_(module, config)
+            quantized_paths.append(path)
+        except Exception:
+            skipped_paths.append(path)
+    if quantized_paths:
+        status = f"{method}:{','.join(quantized_paths)}"
+        if skipped_paths:
+            status += f";skipped:{','.join(skipped_paths)}"
+        return model, status
+    return model, f"not_applicable: torchao found no quantizable targets for {targets}"
+
+
+def _replace_linear_with_bnb_int8(module: object) -> tuple[int, int]:
+    import torch
+    from torch import nn
+    import bitsandbytes as bnb
+
+    replaced = 0
+    skipped = 0
+    for child_name, child in list(module.named_children()):
+        if isinstance(child, nn.Linear):
+            device = child.weight.device
+            dtype = child.weight.dtype
+            replacement = bnb.nn.Linear8bitLt(
+                child.in_features,
+                child.out_features,
+                bias=child.bias is not None,
+                has_fp16_weights=False,
+                threshold=6.0,
+                device=device,
+            )
+            with torch.no_grad():
+                replacement.weight.data = child.weight.detach().to(device=device, dtype=torch.float16)
+                if child.bias is not None and replacement.bias is not None:
+                    replacement.bias.data = child.bias.detach().to(device=device, dtype=dtype)
+            replacement.to(device=device)
+            setattr(module, child_name, replacement)
+            replaced += 1
+        else:
+            child_replaced, child_skipped = _replace_linear_with_bnb_int8(child)
+            replaced += child_replaced
+            skipped += child_skipped
+    return replaced, skipped
+
+
+def _maybe_quantize_model_bnb(
+    model: VoxCPM2StreamingModel,
+    *,
+    method: str,
+    targets: str,
+) -> tuple[VoxCPM2StreamingModel, str]:
+    try:
+        import bitsandbytes as bnb
+        from torch import nn
+    except Exception as exc:  # pragma: no cover - depends on optional bitsandbytes runtime
+        return model, f"unavailable: bitsandbytes: {type(exc).__name__}: {exc}"
+    if not hasattr(bnb.nn, "Linear8bitLt"):
+        return model, "unavailable: bitsandbytes Linear8bitLt is not present"
+
+    target_statuses: list[str] = []
+    total_replaced = 0
+    skipped_paths: list[str] = []
+    for path in _quantization_target_paths(targets):
+        try:
+            module = _get_nested_attr(model, path)
+        except AttributeError:
+            skipped_paths.append(path)
+            continue
+        if not isinstance(module, nn.Module):
+            skipped_paths.append(path)
+            continue
+        try:
+            replaced, _skipped = _replace_linear_with_bnb_int8(module)
+        except Exception:
+            skipped_paths.append(path)
+            continue
+        if replaced:
+            total_replaced += replaced
+            target_statuses.append(f"{path}:{replaced}")
+        else:
+            skipped_paths.append(path)
+    if target_statuses:
+        status = f"{method}:{','.join(target_statuses)}"
+        if skipped_paths:
+            status += f";skipped:{','.join(skipped_paths)}"
+        return model, status
+    return model, f"not_applicable: bitsandbytes found no Linear targets for {targets}"
 
 
 class SoundDeviceSink:
@@ -146,7 +434,7 @@ class SoundDeviceSink:
         self._stream.write(audio.reshape(-1, 1))
 
     def close(self) -> None:
-        if self._pending:
+        if self._stream is None and self._pending:
             self._start()
         if self._stream is not None:
             self._stream.stop()
@@ -179,6 +467,7 @@ def synthesize_voxcpm2_streaming(
     *,
     text: str,
     output_path: Path,
+    model_cache_key: str = "voxcpm2",
     reference_wav_path: Path | None = None,
     prompt_wav_path: Path | None = None,
     prompt_text: str | None = None,
@@ -191,14 +480,20 @@ def synthesize_voxcpm2_streaming(
     retry_badcase: bool = False,
     retry_badcase_max_times: int = 3,
     retry_badcase_ratio_threshold: float = 6.0,
-    audio_normalization: bool = True,
+    seed: int | None = None,
+    quantization_method: str = "disabled",
+    quantization_targets: str = "lm_only",
+    torch_compile: bool = False,
+    torch_compile_mode: str = "reduce-overhead",
+    audio_normalization: bool = False,
     audio_target_peak: float = 0.85,
     sample_rate: int = VOXCPM2_SAMPLE_RATE,
     play_audio: bool = False,
+    playback_mode: str = "after_generation",
     audio_device: str | int | None = None,
     playback_prebuffer_s: float = 0.45,
     audio_latency: str | float | None = "high",
-    model_factory: ModelFactory = _default_model_factory,
+    model_factory: ModelFactory | None = None,
     audio_sink_factory: AudioSinkFactory = SoundDeviceSink,
     audio_observer: AudioObserver | None = None,
     clock: Callable[[], float] = time.perf_counter,
@@ -211,18 +506,44 @@ def synthesize_voxcpm2_streaming(
         raise FileNotFoundError(f"prompt_wav_path does not exist: {prompt_wav_path}")
     if (prompt_wav_path is None) != (prompt_text is None):
         raise ValueError("prompt_wav_path and prompt_text must be provided together")
+    if playback_mode not in {"after_generation", "live"}:
+        raise ValueError("playback_mode must be 'after_generation' or 'live'")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    model = model_factory()
+    default_model_factory_used = model_factory is None
+    if default_model_factory_used and not torch_compile:
+        model, quantization_status = _prepared_default_model_factory(
+            model_cache_key,
+            quantization_method,
+            quantization_targets,
+        )
+    else:
+        if default_model_factory_used:
+            clear_default_model_caches()
+            model = _load_default_voxcpm2_model()
+        else:
+            model = model_factory()
+        model, quantization_status = _maybe_quantize_model(
+            model,
+            method=quantization_method,
+            targets=quantization_targets,
+        )
+    _set_torch_seed(seed)
+    model, torch_compile_status = _maybe_compile_model(
+        model,
+        enabled=torch_compile,
+        mode=torch_compile_mode,
+    )
     chunks: list[StreamingChunk] = []
     total_samples = 0
     first_chunk_latency: float | None = None
     start = clock()
     audio_sink = (
         audio_sink_factory(sample_rate, audio_device, playback_prebuffer_s, audio_latency)
-        if play_audio
+        if play_audio and playback_mode == "live"
         else None
     )
+    deferred_playback_chunks: list[np.ndarray] = []
     normalizer = (
         StreamingPeakNormalizer(target_peak=audio_target_peak)
         if audio_normalization
@@ -255,10 +576,12 @@ def synthesize_voxcpm2_streaming(
                 if first_chunk_latency is None:
                     first_chunk_latency = round(now - start, 3)
                 writer.write(audio)
-                if audio_sink is not None:
-                    audio_sink.write(audio)
                 if audio_observer is not None:
                     audio_observer(audio, sample_rate)
+                if audio_sink is not None:
+                    audio_sink.write(audio)
+                if play_audio and playback_mode == "after_generation":
+                    deferred_playback_chunks.append(audio.copy())
                 total_samples += int(audio.shape[0])
                 chunks.append(
                     StreamingChunk(
@@ -271,6 +594,16 @@ def synthesize_voxcpm2_streaming(
     finally:
         if audio_sink is not None:
             audio_sink.close()
+        if default_model_factory_used and torch_compile:
+            clear_default_model_caches()
+
+    if play_audio and playback_mode == "after_generation" and deferred_playback_chunks:
+        deferred_sink = audio_sink_factory(sample_rate, audio_device, playback_prebuffer_s, audio_latency)
+        try:
+            for audio in deferred_playback_chunks:
+                deferred_sink.write(audio)
+        finally:
+            deferred_sink.close()
 
     total_elapsed = round(clock() - start, 3)
     audio_duration = round(total_samples / sample_rate, 3)
@@ -303,6 +636,13 @@ def synthesize_voxcpm2_streaming(
         retry_badcase=retry_badcase,
         retry_badcase_max_times=retry_badcase_max_times,
         retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
+        seed=seed,
+        quantization_method=quantization_method,
+        quantization_targets=quantization_targets,
+        quantization_status=quantization_status,
+        torch_compile=torch_compile,
+        torch_compile_mode=torch_compile_mode,
+        torch_compile_status=torch_compile_status,
         audio_normalization=audio_normalization,
         audio_target_peak=audio_target_peak,
         chunk_count=len(chunks),
@@ -311,6 +651,7 @@ def synthesize_voxcpm2_streaming(
         audio_duration_s=audio_duration,
         realtime_factor=realtime_factor,
         played_to_device=play_audio,
+        playback_mode=playback_mode,
         audio_device=audio_device,
         playback_prebuffer_s=playback_prebuffer_s,
         audio_latency=audio_latency,
@@ -351,6 +692,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--history", type=Path, default=DEFAULT_HISTORY_PATH)
     parser.add_argument("--play-audio", action="store_true")
+    parser.add_argument("--playback-mode", choices=["after_generation", "live"], default="after_generation")
     parser.add_argument("--audio-device")
     parser.add_argument("--playback-prebuffer-s", type=float, default=0.45)
     parser.add_argument("--audio-latency", default="high")
@@ -363,7 +705,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--retry-badcase", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--retry-badcase-max-times", type=int, default=3)
     parser.add_argument("--retry-badcase-ratio-threshold", type=float, default=6.0)
-    parser.add_argument("--audio-normalization", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--quantization-method", default="disabled")
+    parser.add_argument("--quantization-targets", default="lm_only")
+    parser.add_argument("--torch-compile", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--torch-compile-mode", default="reduce-overhead")
+    parser.add_argument("--audio-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--audio-target-peak", type=float, default=0.85)
     return parser.parse_args(argv)
 
@@ -385,9 +732,15 @@ def main(argv: list[str] | None = None) -> int:
         retry_badcase=args.retry_badcase,
         retry_badcase_max_times=args.retry_badcase_max_times,
         retry_badcase_ratio_threshold=args.retry_badcase_ratio_threshold,
+        seed=args.seed,
+        quantization_method=args.quantization_method,
+        quantization_targets=args.quantization_targets,
+        torch_compile=args.torch_compile,
+        torch_compile_mode=args.torch_compile_mode,
         audio_normalization=args.audio_normalization,
         audio_target_peak=args.audio_target_peak,
         play_audio=args.play_audio,
+        playback_mode=args.playback_mode,
         audio_device=args.audio_device,
         playback_prebuffer_s=args.playback_prebuffer_s,
         audio_latency=args.audio_latency,

@@ -8,6 +8,19 @@
       "backend": "qwen3_tts",
       "expected_imports": ["qwen_tts", "torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "voice_design", "multilingual"],
+      "model_scale": "1.7B",
+      "text_controls": [
+        {
+          "id": "style_instruction",
+          "label": "Style Instruction",
+          "default": "",
+          "lines": 2,
+          "mode": "generation_option",
+          "option_id": "style_instruction",
+          "placeholder": "Speak clearly in a natural studio narration voice.",
+          "description": "Optional Qwen style instruction passed to the backend. Use this to steer delivery, accent, or tone without mixing those instructions into the spoken text."
+        }
+      ],
       "generation_parameters": [
         {
           "id": "max_new_tokens",
@@ -17,7 +30,7 @@
           "min": 128,
           "max": 2048,
           "step": 64,
-          "description": "Generation budget for the Qwen custom-voice decoder."
+          "description": "Maximum decoder tokens for Qwen output. Higher values allow longer speech but increase generation time and memory use."
         },
         {
           "id": "speaker",
@@ -25,7 +38,7 @@
           "type": "choice",
           "default": "Ryan",
           "choices": ["Ryan"],
-          "description": "Built-in Qwen speaker seed used by the custom-voice API."
+          "description": "Built-in Qwen speaker seed used by the custom-voice API. This changes the base speaker style before cloning controls are applied."
         }
       ],
       "notes": "Primary local high-quality baseline."
@@ -38,6 +51,18 @@
       "backend": "voxcpm2",
       "expected_imports": ["torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz"],
+      "model_scale": "2B",
+      "text_controls": [
+        {
+          "id": "control_instruction",
+          "label": "Control Instruction",
+          "default": "",
+          "lines": 2,
+          "mode": "parenthesized_prefix",
+          "placeholder": "slow natural speaking pace, calm conversational tone, clear pauses",
+          "description": "Optional VoxCPM2 control prompt. It is prepended as a parenthesized instruction to steer pace, emotion, and style while keeping the target text separate in AISpeechApp metadata."
+        }
+      ],
       "generation_parameters": [
         {
           "id": "cfg_value",
@@ -47,7 +72,7 @@
           "min": 0.5,
           "max": 5.0,
           "step": 0.1,
-          "description": "Classifier-free guidance scale; higher values can sound more forceful but less stable."
+          "description": "Classifier-free guidance scale. Higher values can increase voice/style strength, but our tone probes found high guidance can cause tail-end ringing; lower values are usually safer and faster to stabilize."
         },
         {
           "id": "inference_timesteps",
@@ -57,28 +82,38 @@
           "min": 4,
           "max": 40,
           "step": 1,
-          "description": "Diffusion inference steps; more steps can improve stability at higher latency."
+          "description": "Diffusion sampling steps. More steps can improve quality for hard prompts but directly increases latency; in recent VoxCPM2 tone probes, 10 steps was cleaner than 7 and faster/cleaner than 14 or 20."
+        },
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "int",
+          "default": 0,
+          "min": 0,
+          "max": 2147483647,
+          "step": 1,
+          "description": "Random seed for VoxCPM2 generation. Reuse a seed for repeatability; change it when pacing, delivery, or artifacts vary between takes."
         },
         {
           "id": "normalize",
           "label": "Normalize Text",
           "type": "bool",
           "default": true,
-          "description": "Run VoxCPM text normalization before synthesis."
+          "description": "Normalize text before synthesis. Usually improves pronunciation of numbers and punctuation with little performance cost."
         },
         {
           "id": "denoise",
           "label": "Denoise Reference",
           "type": "bool",
           "default": false,
-          "description": "Denoise prompt/reference audio when the model was loaded with denoiser support."
+          "description": "Ask VoxCPM2 to denoise the reference audio. Only useful when the model was loaded with denoiser support; otherwise leave off."
         },
         {
           "id": "retry_badcase",
           "label": "Retry Badcase",
           "type": "bool",
           "default": false,
-          "description": "Retry outputs that trip VoxCPM's audio/text ratio heuristic."
+          "description": "Retry outputs that trip VoxCPM's badcase heuristic. Can recover odd length/rhythm failures, but increases total generation time when retries happen."
         },
         {
           "id": "retry_badcase_max_times",
@@ -88,7 +123,7 @@
           "min": 0,
           "max": 8,
           "step": 1,
-          "description": "Maximum retries when badcase retry is enabled."
+          "description": "Maximum extra attempts when Retry Badcase is enabled. Higher values may rescue bad generations but can multiply wait time."
         },
         {
           "id": "retry_badcase_ratio_threshold",
@@ -98,7 +133,22 @@
           "min": 2.0,
           "max": 12.0,
           "step": 0.5,
-          "description": "Audio-to-text ratio threshold used by VoxCPM badcase detection."
+          "description": "Audio-to-text ratio threshold for badcase detection. Lower values reject more suspicious outputs; higher values are more permissive."
+        },
+        {
+          "id": "torch_compile",
+          "label": "Torch Compile",
+          "type": "bool",
+          "default": false,
+          "description": "Experimental torch.compile opt-in. In this Windows/VoxCPM2 streaming setup it has been slower and can corrupt repeated generations, so mutating compile runs are isolated and this should stay off for stable playback."
+        },
+        {
+          "id": "torch_compile_mode",
+          "label": "Compile Mode",
+          "type": "choice",
+          "default": "reduce-overhead",
+          "choices": ["reduce-overhead", "default", "max-autotune"],
+          "description": "torch.compile mode. reduce-overhead favors repeated inference latency, default is conservative, and max-autotune may spend much longer compiling."
         },
         {
           "id": "min_len",
@@ -108,7 +158,7 @@
           "min": 1,
           "max": 64,
           "step": 1,
-          "description": "Minimum generation length passed to VoxCPM."
+          "description": "Minimum generation length. Very low values can allow short or abrupt chunks; keep at 2 unless diagnosing backend behavior."
         },
         {
           "id": "max_len",
@@ -118,10 +168,103 @@
           "min": 512,
           "max": 8192,
           "step": 256,
-          "description": "Maximum token length passed to VoxCPM."
+          "description": "Maximum generation length. Higher values allow longer utterances but can increase memory use and the chance of late-output artifacts."
         }
       ],
       "notes": "Primary challenger; tokenizer-free diffusion-autoregressive stack."
+    },
+    {
+      "id": "voxcpm2_quantized",
+      "name": "VoxCPM2 Quantized",
+      "priority": 1,
+      "repo_id": "openbmb/VoxCPM2",
+      "backend": "voxcpm2_quantized",
+      "expected_imports": ["torch", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz", "quantized"],
+      "model_scale": "2B",
+      "inherits_text_controls": "voxcpm2",
+      "inherits_generation_parameters": "voxcpm2",
+      "generation_parameters": [
+        {
+          "id": "quantization_method",
+          "label": "Quantization",
+          "type": "choice",
+          "default": "dynamic_int8_cpu",
+          "choices": ["dynamic_int8_cpu", "disabled"],
+          "description": "Experimental quantization mode for this candidate only. Dynamic int8 is applied only when VoxCPM2 is running on CPU; CUDA weight-only quantization needs an additional backend such as torchao or bitsandbytes."
+        },
+        {
+          "id": "quantization_targets",
+          "label": "Quant Targets",
+          "type": "choice",
+          "default": "lm_only",
+          "choices": ["lm_only", "base_lm_only", "lm_and_diffusion"],
+          "description": "Submodules eligible for quantization. LM-only keeps the audio VAE, reference encoder, and KV caches unquantized; diffusion is experimental and may affect audio quality."
+        }
+      ],
+      "notes": "Experimental isolated VoxCPM2 variant for conservative LM weight quantization tests. Baseline VoxCPM2 remains unchanged."
+    },
+    {
+      "id": "voxcpm2_torchao_int8",
+      "name": "VoxCPM2 TorchAO Int8",
+      "priority": 1,
+      "repo_id": "openbmb/VoxCPM2",
+      "backend": "voxcpm2_torchao",
+      "expected_imports": ["torch", "torchao", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz", "quantized", "cuda_quantization"],
+      "model_scale": "2B",
+      "inherits_text_controls": "voxcpm2",
+      "inherits_generation_parameters": "voxcpm2",
+      "generation_parameters": [
+        {
+          "id": "quantization_method",
+          "label": "Quantization",
+          "type": "choice",
+          "default": "torchao_int8_weight_only",
+          "choices": ["torchao_int8_weight_only", "torchao_int4_weight_only", "disabled"],
+          "description": "TorchAO CUDA-capable weight-only quantization for this candidate only. Int8 is the safer first comparison; int4 is more aggressive and may need more quality testing."
+        },
+        {
+          "id": "quantization_targets",
+          "label": "Quant Targets",
+          "type": "choice",
+          "default": "lm_only",
+          "choices": ["lm_only", "base_lm_only", "lm_and_diffusion"],
+          "description": "Submodules eligible for TorchAO quantization. LM-only keeps the audio VAE, reference encoder, and KV caches unquantized; diffusion is experimental and may affect audio quality."
+        }
+      ],
+      "notes": "Experimental real TorchAO CUDA weight-only quantization candidate. Compare directly against baseline VoxCPM2 and the CPU dynamic-int8 attempt."
+    },
+    {
+      "id": "voxcpm2_bnb_int8",
+      "name": "VoxCPM2 BNB Int8",
+      "priority": 1,
+      "repo_id": "openbmb/VoxCPM2",
+      "backend": "voxcpm2_bnb",
+      "expected_imports": ["torch", "bitsandbytes", "soundfile"],
+      "capabilities": ["tts", "voice_clone", "voice_design", "multilingual", "48khz", "quantized", "cuda_quantization"],
+      "model_scale": "2B",
+      "inherits_text_controls": "voxcpm2",
+      "inherits_generation_parameters": "voxcpm2",
+      "generation_parameters": [
+        {
+          "id": "quantization_method",
+          "label": "Quantization",
+          "type": "choice",
+          "default": "bnb_int8_linear",
+          "choices": ["bnb_int8_linear", "disabled"],
+          "description": "BitsAndBytes Linear8bitLt replacement for this candidate only. It targets CUDA int8 linear layers while leaving the audio VAE, reference encoder, and KV caches unquantized."
+        },
+        {
+          "id": "quantization_targets",
+          "label": "Quant Targets",
+          "type": "choice",
+          "default": "lm_only",
+          "choices": ["lm_only", "base_lm_only", "lm_and_diffusion"],
+          "description": "Submodules eligible for BitsAndBytes replacement. LM-only keeps the audio VAE, reference encoder, and KV caches unquantized; diffusion is experimental and may affect audio quality."
+        }
+      ],
+      "notes": "Experimental real BitsAndBytes CUDA int8 candidate. Compare directly against baseline VoxCPM2, CPU dynamic-int8, and TorchAO int8."
     },
     {
       "id": "dots_tts_soar",
@@ -139,6 +282,7 @@
         "cli",
         "fine_tuning"
       ],
+      "model_scale": "2B",
       "generation_parameters": [
         {
           "id": "num_steps",
@@ -148,7 +292,7 @@
           "min": 4,
           "max": 40,
           "step": 1,
-          "description": "Sampling steps for dots.tts."
+          "description": "Sampling steps for dots.tts. More steps may improve clarity and speaker similarity, but each step adds latency."
         },
         {
           "id": "guidance_scale",
@@ -158,7 +302,7 @@
           "min": 0.5,
           "max": 3.0,
           "step": 0.1,
-          "description": "Guidance scale for dots.tts continuation cloning."
+          "description": "Guidance scale for dots.tts continuation cloning. Higher values can strengthen the prompt/voice match but may reduce naturalness."
         }
       ],
       "notes": "Main dots.tts quality candidate: highest zero-shot fidelity and speaker similarity variant."
@@ -220,7 +364,7 @@
           "min": 2,
           "max": 24,
           "step": 1,
-          "description": "Sampling steps for the MeanFlow latency variant."
+          "description": "Sampling steps for the MeanFlow latency variant. Lower values improve speed; higher values may improve quality if artifacts appear."
         },
         {
           "id": "guidance_scale",
@@ -230,7 +374,7 @@
           "min": 0.5,
           "max": 3.0,
           "step": 0.1,
-          "description": "Guidance scale for dots.tts continuation cloning."
+          "description": "Guidance scale for dots.tts continuation cloning. Higher values can strengthen the prompt/voice match but may reduce naturalness."
         }
       ],
       "notes": "MeanFlow distilled dots.tts latency candidate; compare quality/latency against soar."
@@ -301,9 +445,49 @@
       "priority": 3,
       "repo_id": "microsoft/VibeVoice-1.5B",
       "backend": "vibevoice",
-      "expected_imports": ["transformers", "torch", "soundfile"],
+      "expected_imports": ["vibevoice", "transformers", "torch", "soundfile"],
       "capabilities": ["tts", "voice_clone", "multispeaker", "long_form"],
-      "notes": "Very popular MIT long-form multi-speaker candidate; check current code availability and cloning API."
+      "model_scale": "1.5B",
+      "generation_parameters": [
+        {
+          "id": "cfg_scale",
+          "label": "CFG scale",
+          "type": "float",
+          "default": 1.3,
+          "min": 0.1,
+          "max": 3.0,
+          "step": 0.1,
+          "description": "VibeVoice guidance scale. Higher values may follow the prompt more strongly, but can sound less natural or expose artifacts."
+        },
+        {
+          "id": "ddpm_steps",
+          "label": "DDPM steps",
+          "type": "int",
+          "default": 10,
+          "min": 1,
+          "max": 20,
+          "step": 1,
+          "description": "VibeVoice diffusion steps. More steps may improve quality but increase generation time."
+        },
+        {
+          "id": "voice_clone",
+          "label": "Voice cloning",
+          "type": "bool",
+          "default": true,
+          "description": "Use the selected reference WAV for voice cloning. Turn off only to test VibeVoice's default voice path."
+        },
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "int",
+          "default": 0,
+          "min": 0,
+          "max": 2147483647,
+          "step": 1,
+          "description": "Random seed for VibeVoice generation. Reuse a seed for repeatability; change it to explore alternate takes."
+        }
+      ],
+      "notes": "Long-form multi-speaker TTS candidate. AISpeechApp uses the VibeVoice native inference path because the generic Transformers pipeline does not expose reference-WAV voice cloning."
     },
     {
       "id": "microsoft_vibevoice_realtime_05b",

@@ -74,11 +74,14 @@ def _write_qwen3(
         attn_implementation="sdpa",
     )
     speaker = str(options.get("speaker", "Ryan"))
-    instruct = "Speak clearly in a natural studio narration voice."
+    instruct = str(options.get("style_instruction") or "Speak clearly in a natural studio narration voice.")
     if language_code == "pt-PT":
-        instruct = (
-            "Speak clearly in European Portuguese from Portugal, not Brazilian Portuguese. "
-            "Use a natural Portugal accent and pronunciation."
+        instruct = str(
+            options.get("style_instruction")
+            or (
+                "Speak clearly in European Portuguese from Portugal, not Brazilian Portuguese. "
+                "Use a natural Portugal accent and pronunciation."
+            )
         )
     wavs, sr = model.generate_custom_voice(
         text=text,
@@ -111,15 +114,27 @@ def _write_voxcpm2(text: str, output: Path, options: dict[str, object]) -> None:
     sf.write(output, wav, VOXCPM2_SAMPLE_RATE)
 
 
-def _write_dots_tts(candidate: str, text: str, output: Path, options: dict[str, object]) -> None:
+def _reference_text_path(reference_wav_path: Path | None) -> Path:
+    if reference_wav_path is None:
+        return Path("voice_refs/first_impression.txt")
+    return reference_wav_path.with_suffix(".txt")
+
+
+def _write_dots_tts(
+    candidate: str,
+    text: str,
+    output: Path,
+    options: dict[str, object],
+    reference_wav_path: Path | None,
+) -> None:
     from dots_tts.runtime import DotsTtsRuntime
 
-    ref_audio = Path("voice_refs/first_impression.wav")
-    ref_text = Path("voice_refs/first_impression.txt")
+    ref_audio = reference_wav_path or Path("voice_refs/first_impression.wav")
+    ref_text = _reference_text_path(reference_wav_path)
     if not ref_audio.exists() or not ref_text.exists():
         raise RuntimeError(
-            "dots.tts needs voice_refs/first_impression.wav and "
-            "voice_refs/first_impression.txt for continuation cloning."
+            "dots.tts needs a reference WAV plus a same-name .txt transcript "
+            f"for continuation cloning: {ref_audio}, {ref_text}"
         )
 
     model_id = "rednote-hilab/dots.tts-soar" if candidate == "dots_tts_soar" else "rednote-hilab/dots.tts-mf"
@@ -134,13 +149,13 @@ def _write_dots_tts(candidate: str, text: str, output: Path, options: dict[str, 
     sf.write(output, result["audio"].float().cpu().squeeze().numpy(), result["sample_rate"])
 
 
-def _write_indextts2(text: str, output: Path) -> None:
+def _write_indextts2(text: str, output: Path, reference_wav_path: Path | None) -> None:
     from huggingface_hub import snapshot_download
     from indextts.infer_v2 import IndexTTS2
 
-    ref_audio = Path("voice_refs/first_impression.wav")
+    ref_audio = reference_wav_path or Path("voice_refs/first_impression.wav")
     if not ref_audio.exists():
-        raise RuntimeError("IndexTTS2 needs voice_refs/first_impression.wav for zero-shot voice cloning.")
+        raise RuntimeError(f"IndexTTS2 needs a reference WAV for zero-shot voice cloning: {ref_audio}")
 
     checkpoint_dir = DEFAULT_MODEL_ROOT / "indextts2-runtime" / "checkpoints"
     snapshot_download(
@@ -158,16 +173,16 @@ def _write_indextts2(text: str, output: Path) -> None:
     tts.infer(spk_audio_prompt=str(ref_audio), text=text, output_path=str(output), verbose=False)
 
 
-def _write_omnivoice(text: str, output: Path) -> None:
+def _write_omnivoice(text: str, output: Path, reference_wav_path: Path | None) -> None:
     import torch
     from omnivoice import OmniVoice
 
-    ref_audio = Path("voice_refs/first_impression.wav")
-    ref_text = Path("voice_refs/first_impression.txt")
+    ref_audio = reference_wav_path or Path("voice_refs/first_impression.wav")
+    ref_text = _reference_text_path(reference_wav_path)
     if not ref_audio.exists() or not ref_text.exists():
         raise RuntimeError(
-            "OmniVoice needs voice_refs/first_impression.wav and "
-            "voice_refs/first_impression.txt for voice cloning."
+            "OmniVoice needs a reference WAV plus a same-name .txt transcript "
+            f"for voice cloning: {ref_audio}, {ref_text}"
         )
 
     device_map = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -181,30 +196,78 @@ def _write_omnivoice(text: str, output: Path) -> None:
     _write_audio_file(output, np.asarray(audio[0], dtype=np.float32), 24000)
 
 
-def _write_vibevoice_15b(text: str, output: Path) -> None:
+def _write_vibevoice_15b(
+    text: str,
+    output: Path,
+    options: dict[str, object],
+    reference_wav_path: Path | None,
+) -> None:
     import torch
-    from transformers import pipeline
-
-    ref_audio = Path("voice_refs/first_impression.wav")
-    if ref_audio.exists():
-        print(
-            "WARNING: VibeVoice 1.5B Transformers pipeline path does not expose "
-            "AISpeechApp's reference-WAV cloning hook yet; generating with its default voice path.",
-            file=sys.stderr,
-        )
-
-    pipe = pipeline(
-        "text-to-speech",
-        model="microsoft/VibeVoice-1.5B",
-        device=0 if torch.cuda.is_available() else -1,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+    from vibevoice.modular.modeling_vibevoice_inference import (
+        VibeVoiceForConditionalGenerationInference,
     )
-    result = pipe(text)
-    audio = result.get("audio")
-    sample_rate = result.get("sampling_rate") or result.get("sample_rate") or 24000
-    if audio is None:
-        raise RuntimeError("VibeVoice pipeline did not return an audio field.")
-    _write_audio_file(output, np.asarray(audio).squeeze(), int(sample_rate))
+    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+
+    ref_audio = reference_wav_path or Path("voice_refs/first_impression.wav")
+    if not ref_audio.exists():
+        raise RuntimeError(f"VibeVoice 1.5B needs a reference WAV for voice cloning: {ref_audio}")
+
+    if "seed" in options:
+        seed = int(options["seed"])
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    load_dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    model_id = str(options.get("model_id", "microsoft/VibeVoice-1.5B"))
+    attn_implementation = str(options.get("attn_implementation", "sdpa"))
+
+    processor = VibeVoiceProcessor.from_pretrained(model_id)
+    model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+        model_id,
+        torch_dtype=load_dtype,
+        device_map=device,
+        attn_implementation=attn_implementation,
+    )
+    model.eval()
+    model.set_ddpm_inference_steps(num_steps=int(options.get("ddpm_steps", 10)))
+
+    speaker_script = text if text.lstrip().lower().startswith("speaker ") else f"Speaker 1: {text}"
+    inputs = processor(
+        text=[speaker_script.replace("’", "'")],
+        voice_samples=[[str(ref_audio)]],
+        padding=True,
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+    for key, value in inputs.items():
+        if torch.is_tensor(value):
+            inputs[key] = value.to(device)
+
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=None,
+        cfg_scale=float(options.get("cfg_scale", 1.3)),
+        tokenizer=processor.tokenizer,
+        generation_config={"do_sample": bool(options.get("do_sample", False))},
+        verbose=bool(options.get("verbose", False)),
+        is_prefill=bool(options.get("voice_clone", True)),
+    )
+    if not getattr(outputs, "speech_outputs", None) or outputs.speech_outputs[0] is None:
+        raise RuntimeError("VibeVoice generation did not return speech audio.")
+
+    if output.suffix.lower() == ".wav":
+        processor.save_audio(outputs.speech_outputs[0], output_path=str(output))
+        return
+
+    temp_wav = output.with_name(f"{output.stem}.tmp.wav")
+    try:
+        processor.save_audio(outputs.speech_outputs[0], output_path=str(temp_wav))
+        audio, sample_rate = sf.read(temp_wav)
+        _write_audio_file(output, np.asarray(audio), int(sample_rate))
+    finally:
+        temp_wav.unlink(missing_ok=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,6 +278,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language-code", required=True)
     parser.add_argument("--language-hint", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reference-wav-path", type=Path)
     parser.add_argument("--options-json", default="{}")
     args = parser.parse_args()
     if args.text_file:
@@ -245,13 +309,13 @@ def main() -> int:
     elif args.candidate == "voxcpm2":
         _write_voxcpm2(args.text, args.output, args.options)
     elif args.candidate in {"dots_tts_soar", "dots_tts_mf"}:
-        _write_dots_tts(args.candidate, args.text, args.output, args.options)
+        _write_dots_tts(args.candidate, args.text, args.output, args.options, args.reference_wav_path)
     elif args.candidate == "indextts2":
-        _write_indextts2(args.text, args.output)
+        _write_indextts2(args.text, args.output, args.reference_wav_path)
     elif args.candidate == "omnivoice":
-        _write_omnivoice(args.text, args.output)
+        _write_omnivoice(args.text, args.output, args.reference_wav_path)
     elif args.candidate == "microsoft_vibevoice_15b":
-        _write_vibevoice_15b(args.text, args.output)
+        _write_vibevoice_15b(args.text, args.output, args.options, args.reference_wav_path)
     else:
         raise RuntimeError(f"No synthesis implementation for {args.candidate}")
     return 0
